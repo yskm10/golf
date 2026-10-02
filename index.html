@@ -64,7 +64,7 @@ summary{cursor:pointer;color:var(--g);font-size:15px;padding:6px 0}
 .gcard.drop{border-color:#f9a825}
 .warn{background:#fde8c8;color:#8a4b00}
 table.pt{width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed}
-table.pt th:nth-child(1){width:9%}table.pt th:nth-child(2){width:15%}
+table.pt th:nth-child(1){width:13%}table.pt th:nth-child(2){width:11%}
 table.pt th,table.pt td{border:1px solid #333;padding:6px 6px;text-align:left}
 table.pt th{background:#eee}
 @page{size:A4;margin:0}
@@ -942,6 +942,13 @@ const noZeroT = (t) => String(t || '').replace(/^0/, '');
 const slotOrder = (a, b) => String(a.start_time || '').localeCompare(String(b.start_time || ''))
   || (a.start_course === b.start_course ? 0 : (a.start_course === 'OUT' ? -1 : 1)) || a.group_no - b.group_no;
 
+// 組の呼び名：OUT1, OUT2 … / IN1, IN2 …（スタート時間順）
+function slotLabels(slots) {
+  const n = { OUT: 0, IN: 0 }, m = new Map();
+  for (const g of [...slots].sort(slotOrder)) { const c = g.start_course === 'IN' ? 'IN' : 'OUT'; m.set(g.id, c + (++n[c])); }
+  return m;
+}
+
 async function loadGroupData(id) {
   const sb = state.sb;
   const [evR, enR, plR, grR] = await Promise.all([
@@ -1012,6 +1019,7 @@ function groupsAnnouncement(d) {
   const num = (n) => Number(n).toLocaleString('ja-JP');
   const lines = [`【${ev.name} 組合せ】`, fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : ''), ''];
   let twos = 0;
+  const lab = slotLabels(slots);
   for (const course of ['OUT', 'IN']) {
     let head = false;
     for (const g of slots.filter((x) => (x.start_course || 'OUT') === course)) {
@@ -1020,7 +1028,7 @@ function groupsAnnouncement(d) {
       if (!ms.length) continue;
       if (!head) { if (lines[lines.length - 1] !== '') lines.push(''); lines.push(`■${course}スタート`); head = true; }
       if (ms.length === 2) twos++;
-      lines.push(`${g.group_no}組 ${noZeroT(hhmm(g.start_time))}`);
+      lines.push(`${lab.get(g.id)}　${noZeroT(hhmm(g.start_time))}`);
       lines.push('　' + ms.map((e) => e.name).join('、'));
     }
   }
@@ -1139,6 +1147,7 @@ async function viewGroups(id) {
     const unassigned = joined.filter((e) => !assignedIds.has(e.id));
     const selGroup = selected ? groupOf(selected) : null;
     const cap = d.slots.length * 4;
+    const lab = slotLabels(d.slots);
     const nodes = [];
 
     nodes.push(el('div', { class: 'stats', style: 'grid-template-columns:repeat(3,1fr)' },
@@ -1180,7 +1189,7 @@ async function viewGroups(id) {
       const canDrop = selected && !g.locked && (!selGroup || selGroup.id !== g.id) && ms.length < 4;
       nodes.push(el('div', { class: 'gcard' + (g.locked ? ' locked' : '') + (canDrop ? ' drop' : '') },
         el('div', { class: 'row between' },
-          el('div', {}, el('strong', {}, `${g.group_no}組　${g.start_course || ''} ${noZeroT(hhmm(g.start_time))}`), ' ',
+          el('div', {}, el('strong', {}, `${lab.get(g.id)}　${noZeroT(hhmm(g.start_time))}`), ' ',
             active.length === 2 && el('span', { class: 'badge warn' }, '2名組'), ' ',
             el('span', { class: 'muted' }, (avg ? `平均${avg}` : '') + (unknown ? `（不明${unknown}人）` : ''))),
           el('button', { class: 'btn sm', onclick: () => toggleLock(g) }, g.locked ? '🔒 ロック中' : 'ロックする')),
@@ -1206,6 +1215,7 @@ async function viewGroups(id) {
 async function viewPrint(id) {
   const d = await loadGroupData(id);
   const emap = new Map(d.entries.map((e) => [e.id, e]));
+  const lab = slotLabels(d.slots);
   const tbl = (course) => {
     const list = d.slots.filter((g) => (g.start_course || 'OUT') === course);
     if (!list.length) return null;
@@ -1215,12 +1225,11 @@ async function viewPrint(id) {
       const cells = [0, 1, 2, 3].map((i) => {
         const e = ms[i];
         if (!e) return el('td', {}, '');
-        const t = d.eff(e).tee;
-        return el('td', {}, e.name, t && TEE[t] ? el('small', {}, `（${TEE[t][0]}）`) : null);
+        return el('td', {}, e.name);
       });
-      return el('tr', {}, el('td', {}, g.group_no), el('td', {}, noZeroT(hhmm(g.start_time))), ...cells);
+      return el('tr', {}, el('td', {}, lab.get(g.id)), el('td', {}, noZeroT(hhmm(g.start_time))), ...cells);
     });
-    return el('div', { style: 'margin-top:14px' }, el('h3', { style: 'margin:0 0 4px' }, course + ' スタート'),
+    return el('div', { style: 'margin-top:14px' }, el('h3', { style: 'margin:0 0 4px' }, course),
       el('table', { class: 'pt' },
         el('thead', {}, el('tr', {}, ['組', '時間', '1', '2', '3', '4'].map((h) => el('th', {}, h)))),
         el('tbody', {}, rows)));
