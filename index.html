@@ -10,6 +10,7 @@
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;color:var(--tx);background:#f4f6f5;font-size:16px;line-height:1.5}
 header{background:var(--g);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:5}
+header a{color:#fff;text-decoration:none}
 h1{font-size:18px;margin:0}
 h2{font-size:17px;margin:14px 0 6px}
 h3{font-size:15px;margin:14px 0 4px}
@@ -76,6 +77,28 @@ const ls = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* noop */ } },
   del(k) { try { localStorage.removeItem(k); } catch (e) { /* noop */ } }
 };
+
+function getTeams() {
+  try { const a = JSON.parse(ls.get('golf_teams') || '[]'); return Array.isArray(a) ? a.filter((t) => t && t.token) : []; } catch (e) { return []; }
+}
+function setTeams(a) { ls.set('golf_teams', JSON.stringify(a)); }
+function rememberTeam(token, name) {
+  const a = getTeams(); const t = a.find((x) => x.token === token);
+  if (t) t.name = name; else a.push({ token, name });
+  setTeams(a);
+}
+async function fetchTeam(token) {
+  try { const r = await makeClient(token).from('teams').select('*').maybeSingle(); return r.data || null; } catch (e) { return null; }
+}
+function switchTo(token) {
+  ls.set('golf_token', token);
+  history.replaceState(null, '', location.pathname + '#/events');
+  init();
+}
+function tokenFromInput(v) {
+  const m = v.trim().match(/[?&]t=([A-Za-z0-9]+)/) || (/^[A-Za-z0-9]{20,}$/.test(v.trim()) ? [null, v.trim()] : null);
+  return m ? m[1] : null;
+}
 
 function el(tag, props, ...kids) {
   const e = document.createElement(tag);
@@ -244,10 +267,14 @@ async function init() {
     team = r.data;
   } catch (e) { team = null; }
   if (!team) {
+    setTeams(getTeams().filter((t) => t.token !== state.token));
     ls.del('golf_token');
+    const rest = getTeams();
+    if (rest.length) { ls.set('golf_token', rest[0].token); return init(); }
     return renderWelcome('幹事用URLが正しくないか、チームが見つかりません');
   }
   state.team = team;
+  rememberTeam(state.token, team.name);
   if (!state.listening) {
     state.listening = true;
     window.addEventListener('hashchange', routeAdmin);
@@ -293,7 +320,7 @@ function renderWelcome(errText) {
 function shell(active, content) {
   const tab = (id, label, href) => el('a', { href, class: active === id ? 'on' : '' }, label);
   return el('div', {},
-    el('header', {}, el('h1', {}, '⛳ ' + (state.team ? state.team.name : '組分け'))),
+    el('header', {}, el('h1', {}, el('a', { href: '#/teams' }, '⛳ ' + (state.team ? state.team.name : '組分け') + ' ▾'))),
     el('main', {}, content),
     el('nav', { class: 'tabs' },
       tab('events', '📅 コンペ', '#/events'),
@@ -313,6 +340,7 @@ async function routeAdmin() {
   else if (a === 'players' && b === 'import') { active = 'players'; view = viewImport; }
   else if (a === 'players') { active = 'players'; view = viewPlayers; }
   else if (a === 'player') { active = 'players'; view = () => viewPlayerForm(b === 'new' ? null : b); }
+  else if (a === 'teams') { active = 'settings'; view = viewTeams; }
   else if (a === 'settings') { active = 'settings'; view = viewSettings; }
   else view = viewEvents;
   try {
@@ -892,6 +920,61 @@ async function viewImport() {
   ];
 }
 
+/* ====== チームの切り替え ====== */
+async function viewTeams() {
+  const teams = getTeams();
+  const nameIn = el('input', { placeholder: '例：○○ゴルフ会 幹事チーム' });
+  const urlIn = el('input', { placeholder: '幹事用URLを貼り付け' });
+  const remove = (t) => {
+    if (!confirm(`「${t.name}」をこの端末のリストから外します（データは消えません）。幹事用URLを控えていないと、戻れなくなります。`)) return;
+    setTeams(getTeams().filter((x) => x.token !== t.token));
+    if (t.token !== state.token) return refresh();
+    const next = getTeams()[0];
+    if (next) return switchTo(next.token);
+    ls.del('golf_token');
+    history.replaceState(null, '', location.pathname);
+    state.team = null;
+    renderWelcome();
+  };
+  return [
+    el('h2', {}, 'チームを切り替える'),
+    teams.map((t) => el('div', { class: 'card' },
+      el('div', { class: 'row between' },
+        el('div', {}, el('strong', {}, t.name), t.token === state.token && el('span', { class: 'badge', style: 'margin-left:6px' }, '使用中')),
+        t.token === state.token ? null : el('button', { class: 'btn sm pri', onclick: () => switchTo(t.token) }, '切り替える')),
+      el('div', { class: 'row', style: 'margin-top:8px' },
+        el('button', { class: 'btn sm', onclick: () => copyText(`${base()}?t=${t.token}`) }, '幹事用URLをコピー'),
+        el('button', { class: 'btn sm bad', onclick: () => remove(t) }, 'この端末から外す')))),
+    el('div', { class: 'card' },
+      el('strong', {}, '新しいチームを作る'),
+      el('label', {}, 'チーム名'), nameIn,
+      el('p', {}, el('button', {
+        class: 'btn pri block', onclick: () => guard(async () => {
+          if (!nameIn.value.trim()) return toast('チーム名を入力してください');
+          const r = must(await makeClient(null).rpc('create_team', { p_name: nameIn.value }));
+          const row = Array.isArray(r) ? r[0] : r;
+          rememberTeam(row.admin_token, nameIn.value.trim());
+          switchTo(row.admin_token);
+        })
+      }, 'チームを作って切り替える')),
+      el('p', { class: 'muted' }, '作ったあとの「幹事用URL」は、設定のタブか、この画面の「幹事用URLをコピー」から控えてください。')),
+    el('div', { class: 'card' },
+      el('strong', {}, '幹事用URLでチームを追加'),
+      el('p', { class: 'muted' }, '他の幹事から受け取ったURLを貼ると、そのチームをこの端末に追加します。'),
+      urlIn,
+      el('p', {}, el('button', {
+        class: 'btn block', onclick: () => guard(async () => {
+          const tok = tokenFromInput(urlIn.value);
+          if (!tok) return toast('URLを確認してください');
+          const team = await fetchTeam(tok);
+          if (!team) return toast('このURLのチームが見つかりません');
+          rememberTeam(tok, team.name);
+          switchTo(tok);
+        })
+      }, '追加して切り替える')))
+  ];
+}
+
 /* ====== 設定 ====== */
 async function viewSettings() {
   const adminUrl = `${base()}?t=${state.token}`;
@@ -915,14 +998,7 @@ async function viewSettings() {
       el('input', { value: adminUrl, readonly: true, onclick: (e) => e.target.select() }),
       el('p', {}, el('button', { class: 'btn sm pri', onclick: () => copyText(adminUrl) }, '幹事用URLをコピー'))),
     el('div', { class: 'card' },
-      el('button', {
-        class: 'btn bad block', onclick: () => {
-          if (!confirm('この端末から幹事ログイン情報を消します（データは消えません）。幹事用URLを控えていない場合は先にコピーしてください。')) return;
-          ls.del('golf_token');
-          location.hash = '';
-          location.reload();
-        }
-      }, 'この端末からログアウト'))
+      el('a', { class: 'btn block', href: '#/teams' }, 'チームを切り替える・新しく作る'))
   ];
 }
 
