@@ -63,10 +63,12 @@ summary{cursor:pointer;color:var(--g);font-size:15px;padding:6px 0}
 .gcard.locked{background:#eef3ef}
 .gcard.drop{border-color:#f9a825}
 .warn{background:#fde8c8;color:#8a4b00}
-table.pt{width:100%;border-collapse:collapse;font-size:14px}
+table.pt{width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed}
+table.pt th:nth-child(1){width:9%}table.pt th:nth-child(2){width:15%}
 table.pt th,table.pt td{border:1px solid #333;padding:6px 6px;text-align:left}
 table.pt th{background:#eee}
-@media print{header,.tabs,.no-print,.toast{display:none!important}body{background:#fff}main{padding:0!important;max-width:none!important}table.pt{font-size:12pt}tr{break-inside:avoid}}
+@page{size:A4;margin:0}
+@media print{body{padding:12mm 14mm!important}header,.tabs,.no-print,.toast{display:none!important}body{background:#fff}main{padding:0!important;max-width:none!important}table.pt{font-size:12pt}tr{break-inside:avoid}}
 </style>
 </head>
 <body>
@@ -1010,13 +1012,17 @@ function groupsAnnouncement(d) {
   const num = (n) => Number(n).toLocaleString('ja-JP');
   const lines = [`【${ev.name} 組合せ】`, fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : ''), ''];
   let twos = 0;
-  for (const g of slots) {
-    const ms = members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
-      .map((m) => eBy.get(m.entry_id)).filter((e) => e && e.attendance === 'join');
-    if (!ms.length) continue;
-    if (ms.length === 2) twos++;
-    lines.push(`${g.group_no}組 ${g.start_course || ''} ${noZeroT(hhmm(g.start_time))}`);
-    lines.push('　' + ms.map((e) => e.name).join('、'));
+  for (const course of ['OUT', 'IN']) {
+    let head = false;
+    for (const g of slots.filter((x) => (x.start_course || 'OUT') === course)) {
+      const ms = members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
+        .map((m) => eBy.get(m.entry_id)).filter((e) => e && e.attendance === 'join');
+      if (!ms.length) continue;
+      if (!head) { if (lines[lines.length - 1] !== '') lines.push(''); lines.push(`■${course}スタート`); head = true; }
+      if (ms.length === 2) twos++;
+      lines.push(`${g.group_no}組 ${noZeroT(hhmm(g.start_time))}`);
+      lines.push('　' + ms.map((e) => e.name).join('、'));
+    }
   }
   const bySelf = ev.playfee_by_self !== false;
   const foot = [];
@@ -1200,26 +1206,33 @@ async function viewGroups(id) {
 async function viewPrint(id) {
   const d = await loadGroupData(id);
   const emap = new Map(d.entries.map((e) => [e.id, e]));
-  const rows = d.slots.map((g) => {
-    const ms = d.members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
-      .map((m) => emap.get(m.entry_id)).filter((e) => e && e.attendance === 'join');
-    const cells = [0, 1, 2, 3].map((i) => {
-      const e = ms[i];
-      if (!e) return el('td', {}, '');
-      const t = d.eff(e).tee;
-      return el('td', {}, e.name, t && TEE[t] ? el('small', {}, `（${TEE[t][0]}）`) : null);
+  const tbl = (course) => {
+    const list = d.slots.filter((g) => (g.start_course || 'OUT') === course);
+    if (!list.length) return null;
+    const rows = list.map((g) => {
+      const ms = d.members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
+        .map((m) => emap.get(m.entry_id)).filter((e) => e && e.attendance === 'join');
+      const cells = [0, 1, 2, 3].map((i) => {
+        const e = ms[i];
+        if (!e) return el('td', {}, '');
+        const t = d.eff(e).tee;
+        return el('td', {}, e.name, t && TEE[t] ? el('small', {}, `（${TEE[t][0]}）`) : null);
+      });
+      return el('tr', {}, el('td', {}, g.group_no), el('td', {}, noZeroT(hhmm(g.start_time))), ...cells);
     });
-    return el('tr', {}, el('td', {}, g.group_no), el('td', {}, g.start_course || ''), el('td', {}, noZeroT(hhmm(g.start_time))), ...cells);
-  });
+    return el('div', { style: 'margin-top:14px' }, el('h3', { style: 'margin:0 0 4px' }, course + ' スタート'),
+      el('table', { class: 'pt' },
+        el('thead', {}, el('tr', {}, ['組', '時間', '1', '2', '3', '4'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, rows)));
+  };
   return [
     el('div', { class: 'row between no-print' },
       el('a', { class: 'btn sm', href: `#/event/${id}/groups` }, '← 組分けに戻る'),
       el('button', { class: 'btn sm pri', onclick: () => window.print() }, '印刷する')),
+    el('div', { class: 'muted no-print' }, 'PDF保存するときは、印刷画面の「ヘッダーとフッター」はオフのままでOKです（自動で入りません）'),
     el('h2', {}, `${d.ev.name} 組合せ`),
     el('div', { class: 'muted' }, fmtDate(d.ev.event_date) + (d.ev.course_name ? ' ' + d.ev.course_name : '')),
-    el('table', { class: 'pt', style: 'margin-top:10px' },
-      el('thead', {}, el('tr', {}, ['組', 'コース', '時間', '1', '2', '3', '4'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, rows))
+    tbl('OUT'), tbl('IN')
   ];
 }
 
