@@ -1016,7 +1016,7 @@ function groupsAnnouncement(d) {
     if (!ms.length) continue;
     if (ms.length === 2) twos++;
     lines.push(`${g.group_no}組 ${g.start_course || ''} ${noZeroT(hhmm(g.start_time))}`);
-    lines.push('　' + ms.map((e) => noSpace(e.name)).join('、'));
+    lines.push('　' + ms.map((e) => e.name).join('、'));
   }
   const bySelf = ev.playfee_by_self !== false;
   const foot = [];
