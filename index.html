@@ -857,13 +857,34 @@ async function viewPlayers() {
   };
   search.addEventListener('input', draw);
   draw();
+  // 他のチームの名簿をコピー（この端末で開いたことのあるチームから）
+  const others = getTeams().filter((t) => t.token !== state.token);
+  const srcSel = el('select', {}, ...others.map((t) => el('option', { value: t.token }, t.name || 'チーム')));
+  const copyCard = others.length ? el('details', { class: 'card' },
+    el('summary', {}, '他のチームの名簿をコピーする'),
+    el('p', { class: 'muted' }, '選んだチームの名簿から、このチームにまだいない人だけを追加します（名前が同じ人は飛ばします）。コピーしたあとは別々の名簿になります。新しい人が増えたら、もう一度コピーできます。'),
+    srcSel,
+    el('p', {}, el('button', { class: 'btn block', onclick: () => guard(async () => {
+      const src = must(await makeClient(srcSel.value).from('players').select('*'));
+      if (!src.length) return toast('コピー元の名簿が空です（URLが古い可能性があります）');
+      const have = new Set(players.map((p) => norm(p.name)));
+      const rows = src.filter((p) => !have.has(norm(p.name))).map((p) => ({
+        team_id: state.team.id, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana,
+        avg_score: p.avg_score, affiliation: p.affiliation, tee: p.tee, note: p.note
+      }));
+      if (!rows.length) return toast('新しくコピーする人はいません');
+      if (!confirm(`${rows.length}人をこのチームの名簿に追加します（${src.length - rows.length}人は登録済みのため飛ばします）。よろしいですか？`)) return;
+      for (let i = 0; i < rows.length; i += 100) must(await state.sb.from('players').insert(rows.slice(i, i + 100)));
+      toast(`${rows.length}人をコピーしました`);
+      routeAdmin();
+    }) }, 'コピーする'))) : null;
   return [
     el('div', { class: 'row between' },
       el('h2', {}, `名簿（${players.length}人）`),
       el('div', { class: 'row' },
         el('a', { class: 'btn sm', href: '#/players/import' }, 'まとめて追加'),
         el('a', { class: 'btn sm pri', href: '#/player/new' }, '＋ 追加'))),
-    search, list
+    copyCard, search, list
   ];
 }
 
