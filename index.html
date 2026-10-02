@@ -1346,18 +1346,14 @@ async function renderForm(token) {
   const { data, error } = await state.sb.rpc('form_get', { p_form_token: token });
   if (error || !data) return mount(msgPage('出欠フォーム', 'URLが正しくないようです。幹事さんに確認してください。'));
   const ev = data.event;
-  const players = data.players;
   document.title = ev.name + ' 出欠';
   if (!ev.is_open) return mount(msgPage(ev.name, '出欠の受付は終了しました。変更がある場合は幹事さんに連絡してください。'));
 
   const S = { attendance: null, party: null };
-  const lastKey = 'golf_last_' + token;
-
-  const filter = el('input', { type: 'search', placeholder: '名前の一部で絞り込み（例：やまだ）' });
-  const sel = el('select', {});
-  const newNm = nameInputs('', '', '', '');
-  const newBox = el('div', { hidden: true }, newNm.node);
-  const hint = el('div', { class: 'muted' });
+  const meKey = 'golf_me';
+  let me = {};
+  try { me = JSON.parse(ls.get(meKey) || '{}') || {}; } catch (e) { me = {}; }
+  const newNm = nameInputs(me.l || '', me.f || '', me.lk || '', me.fk || '');
   const partyBox = el('div', { hidden: true });
   const attWrap = el('div', {});
   const partyWrap = el('div', {});
@@ -1366,22 +1362,6 @@ async function renderForm(token) {
   const note = el('textarea', { placeholder: '例：○○さんと同じ組を希望 / 早上がり希望 など（自動では反映されず、幹事が確認します）' });
   const submit = el('button', { class: 'btn pri block', type: 'button' }, '回答する');
 
-  function fillSel() {
-    const q = norm(filter.value.trim());
-    const cur = sel.value;
-    const opts = players.filter((p) => !q || norm(p.name + (p.kana || '') + (p.affiliation || '')).includes(q));
-    sel.replaceChildren(
-      el('option', { value: '' }, '選んでください'),
-      ...opts.map((p) => el('option', { value: p.id }, p.name + (p.affiliation ? `（${p.affiliation}）` : ''))),
-      el('option', { value: '__new' }, '名簿にない（初めて参加）'));
-    sel.value = [...sel.options].some((o) => o.value === cur) ? cur : '';
-    onSel();
-  }
-  function onSel() {
-    const v = sel.value;
-    newBox.hidden = v !== '__new';
-    hint.textContent = v === '__new' ? '初めての方は、幹事さんの確認後に名簿へ追加されます。平均スコアは「0」と入力してください。' : '';
-  }
   function drawAtt() {
     attWrap.replaceChildren(seg([['join', '参加します'], ['absent', '欠席します']], S.attendance, (v) => {
       S.attendance = v;
@@ -1395,15 +1375,11 @@ async function renderForm(token) {
       drawAtt();
     }, true));
   }
-  filter.addEventListener('input', fillSel);
-  sel.addEventListener('change', onSel);
   partyBox.append(el('label', {}, '表彰式・打上げ'), partyWrap);
 
   submit.addEventListener('click', () => guard(async () => {
-    const v = sel.value;
-    if (!v) return toast('お名前を選んでください');
-    if (v === '__new' && (!noSpace(newNm.l.value) || !noSpace(newNm.f.value))) return toast('姓と名を入力してください');
-    if (v === '__new' && (!kanaVal(newNm.lk.value) || !kanaVal(newNm.fk.value))) return toast('姓のよみ・名のよみを入力してください');
+    if (!noSpace(newNm.l.value) || !noSpace(newNm.f.value)) return toast('姓と名を入力してください');
+    if (!kanaVal(newNm.lk.value) || !kanaVal(newNm.fk.value)) return toast('姓のよみ・名のよみを入力してください');
     if (!S.attendance) return toast('参加／欠席を選んでください');
     if (ev.has_party && S.attendance === 'join' && !S.party) return toast('表彰式・打上げの参加可否を選んでください');
     if (S.attendance === 'join') {
@@ -1413,21 +1389,20 @@ async function renderForm(token) {
     }
     submit.disabled = true;
     try {
-      const isNew = v === '__new';
       const res = must(await state.sb.rpc('form_submit', {
         p_form_token: token,
-        p_player_id: isNew ? null : v,
-        p_last_name: isNew ? noSpace(newNm.l.value) : null,
-        p_first_name: isNew ? noSpace(newNm.f.value) : null,
-        p_last_kana: isNew ? kanaVal(newNm.lk.value) : null,
-        p_first_kana: isNew ? kanaVal(newNm.fk.value) : null,
+        p_player_id: null,
+        p_last_name: noSpace(newNm.l.value),
+        p_first_name: noSpace(newNm.f.value),
+        p_last_kana: kanaVal(newNm.lk.value),
+        p_first_kana: kanaVal(newNm.fk.value),
         p_attendance: S.attendance,
         p_party: ev.has_party && S.attendance === 'join' ? S.party : null,
         p_avg_score: S.attendance === 'join' ? numOrNull(avg.value) : null,
         p_note: strOrNull(note.value)
       }));
-      if (!isNew) ls.set(lastKey, v);
-      const who = isNew ? joinName(newNm.l.value, newNm.f.value) : players.find((x) => x.id === v).name;
+      ls.set(meKey, JSON.stringify({ l: noSpace(newNm.l.value), f: noSpace(newNm.f.value), lk: kanaVal(newNm.lk.value), fk: kanaVal(newNm.fk.value) }));
+      const who = joinName(newNm.l.value, newNm.f.value);
       mount(el('div', {},
         el('header', {}, el('h1', {}, '⛳ ' + ev.name)),
         el('main', {},
@@ -1435,7 +1410,6 @@ async function renderForm(token) {
             el('h2', {}, '回答を受け付けました'),
             el('p', {}, `${who}さん：${S.attendance === 'join' ? '参加' : '欠席'}` +
               (ev.has_party && S.attendance === 'join' ? `／打上げ：${S.party === 'join' ? '参加' : '不参加'}` : '')),
-            res.status === 'pending' && el('p', { class: 'muted' }, '初めての方は幹事さんが確認後に名簿へ追加します。'),
             el('p', { class: 'muted' }, '内容を変えたいときは、もう一度回答すると上書きされます。'),
             el('button', { class: 'btn', onclick: () => renderForm(token) }, '回答を修正する')))));
     } finally {
@@ -1450,16 +1424,12 @@ async function renderForm(token) {
         el('strong', {}, fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : '')),
         ev.form_deadline && el('div', { class: 'muted' }, '回答の締切：' + fmtDateTime(ev.form_deadline))),
       el('div', { class: 'card' },
-        el('label', {}, 'お名前'), filter, el('div', { style: 'height:8px' }), sel,
-        newBox, hint,
+        newNm.node,
         el('label', {}, '参加しますか？'), attWrap,
         partyBox,
         avgBox,
         el('label', {}, '備考（任意）'), note),
       submit)));
-  fillSel();
-  const last = ls.get(lastKey);
-  if (last && players.some((p) => p.id === last)) { sel.value = last; onSel(); }
   drawAtt();
 }
 
