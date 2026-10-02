@@ -348,13 +348,21 @@ async function viewEvents() {
 async function viewEventForm(id) {
   const ev = id
     ? must(await state.sb.from('events').select('*').eq('id', id).single())
-    : { name: '', event_date: '', course_name: '', group_count_hint: '', has_party: false, form_deadline: null, plan_name: '', fee_per_person: '', small_group_fee: '', cancel_policy: '', notes_admin: '', notes_line: '' };
+    : { name: '', event_date: '', course_name: '', group_count_hint: '', has_party: false, form_deadline: null, fee_per_person: '', compe_fee: '', includes: '', payment_note: '受付で現金', small_group_fee: '', cancel_policy: '', notes_admin: '', notes_line: '' };
   const name = el('input', { value: ev.name, placeholder: '例：第12回 秋季コンペ' });
   const date = el('input', { type: 'date', value: ev.event_date || '' });
   const course = el('input', { value: ev.course_name || '', placeholder: 'ゴルフ場名' });
   const groups = el('input', { type: 'number', inputmode: 'numeric', value: ev.group_count_hint ?? '', placeholder: '空欄でOK' });
-  const plan = el('input', { value: ev.plan_name || '', placeholder: '例：超[早期予約]土日祝特別営業日セルフ 昼バイキング付' });
   const fee = el('input', { type: 'number', inputmode: 'numeric', value: ev.fee_per_person ?? '', placeholder: '例：10750' });
+  const compeFee = el('input', { type: 'number', inputmode: 'numeric', value: ev.compe_fee ?? '', placeholder: '例：4250（なければ空欄）' });
+  const totalView = el('div', { class: 'muted' });
+  const showTotal = () => {
+    const a = numOrNull(fee.value) || 0, c = numOrNull(compeFee.value) || 0;
+    totalView.textContent = (a || c) ? `1人の参加費の合計：${(a + c).toLocaleString('ja-JP')}円` : '';
+  };
+  fee.addEventListener('input', showTotal); compeFee.addEventListener('input', showTotal); showTotal();
+  const includes = el('input', { value: ev.includes || '', placeholder: '例：昼食付・セルフ・乗用カート' });
+  const payNote = el('input', { value: ev.payment_note || '', placeholder: '例：受付で現金' });
   const smallFee = el('input', { type: 'number', inputmode: 'numeric', value: ev.small_group_fee ?? '', placeholder: '例：3300（1組2名のとき1人あたりの追加）' });
   const cancel = el('textarea', { value: ev.cancel_policy || '', placeholder: '例：土日祝は1週間前から1人5,000円、平日は3日前から1人3,000円' });
   const notesAdmin = el('textarea', { value: ev.notes_admin || '', placeholder: '幹事だけが見るメモ（ゴルフ場の注意事項、クーポンURLなど）' });
@@ -370,8 +378,8 @@ async function viewEventForm(id) {
   function applyBooking(d) {
     const fill = (input, v) => { if (v != null && v !== '') input.value = v; };
     if (!name.value.trim() && d.course_name) name.value = d.course_name + 'コンペ';
-    fill(date, d.event_date); fill(course, d.course_name); fill(plan, d.plan_name);
-    fill(fee, d.fee_per_person); fill(smallFee, d.small_group_fee); fill(cancel, d.cancel_policy);
+    fill(date, d.event_date); fill(course, d.course_name); fill(includes, d.includes);
+    fill(fee, d.fee_per_person); showTotal(); fill(smallFee, d.small_group_fee); fill(cancel, d.cancel_policy);
     fill(notesAdmin, d.notes_admin); fill(groups, d.group_count);
     const seen = new Set();
     pendingSlots = (d.slots || [])
@@ -426,8 +434,10 @@ async function viewEventForm(id) {
       el('label', {}, '開催日'), date,
       el('label', {}, 'ゴルフ場'), course,
       el('label', {}, '組数の目安'), groups,
-      el('label', {}, 'プラン名'), plan,
-      el('label', {}, 'お一人様の料金（円）'), fee,
+      el('label', {}, 'プレーフィー（1人あたり・円）'), fee,
+      el('label', {}, 'コンペ費（1人あたり・円）'), compeFee, totalView,
+      el('label', {}, '料金に含まれるもの'), includes,
+      el('label', {}, '集金方法'), payNote,
       el('label', {}, '1組2名のときの追加料金（円・1人あたり）'), smallFee,
       el('label', {}, 'キャンセル規定'), cancel,
       el('label', {}, '特記事項（幹事用）'), notesAdmin,
@@ -443,7 +453,9 @@ async function viewEventForm(id) {
           event_date: date.value || null,
           course_name: strOrNull(course.value),
           group_count_hint: numOrNull(groups.value),
-          plan_name: strOrNull(plan.value),
+          compe_fee: numOrNull(compeFee.value),
+          includes: strOrNull(includes.value),
+          payment_note: strOrNull(payNote.value),
           fee_per_person: numOrNull(fee.value),
           small_group_fee: numOrNull(smallFee.value),
           cancel_policy: strOrNull(cancel.value),
@@ -599,20 +611,37 @@ async function viewEvent(id) {
         })
       }, '名簿に追加して参加にする'))));
 
+  const noZero = (t) => String(t).replace(/^0/, '');
+  const times = slots.map((g) => hhmm(g.start_time)).filter(Boolean).sort();
+  const totalFee = (ev.fee_per_person || 0) + (ev.compe_fee || 0);
+  const num = (n) => Number(n).toLocaleString('ja-JP');
+  const feeLine = (ev.fee_per_person != null || ev.compe_fee != null)
+    ? '参加費：' + (ev.compe_fee != null && ev.fee_per_person != null
+      ? `${num(totalFee)}円（プレーフィー${num(ev.fee_per_person)}円＋コンペ費${num(ev.compe_fee)}円）`
+      : `${num(totalFee)}円`) : null;
   const lineText = [
     `【${ev.name}】`,
     fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : ''),
+    times.length ? `スタート：${noZero(times[0])}〜${noZero(times[times.length - 1])}（組は後日お知らせ）` : null,
+    feeLine,
+    ev.includes ? '内容：' + ev.includes : null,
+    ev.payment_note ? 'お支払い：' + ev.payment_note : null,
+    '',
     '出欠のご回答をお願いします🙏',
     formUrl,
     ev.form_deadline ? '締切：' + fmtDateTime(ev.form_deadline) : null,
     ev.notes_line ? '\n' + ev.notes_line : null
-  ].filter(Boolean).join('\n');
+  ].filter((x) => x !== null && x !== undefined).join('\n');
 
   // ---- 予約内容 ----
   const yen = (n) => '¥' + Number(n).toLocaleString('ja-JP');
+  const total = (ev.fee_per_person || 0) + (ev.compe_fee || 0);
   const infoLines = [
-    ev.plan_name ? 'プラン：' + ev.plan_name : null,
-    ev.fee_per_person != null ? `お一人様：${yen(ev.fee_per_person)}` + (ev.small_group_fee ? `（1組2名のときは +${yen(ev.small_group_fee)}）` : '') : null
+    (ev.fee_per_person != null || ev.compe_fee != null)
+      ? `参加費：${ev.fee_per_person != null ? 'プレーフィー' + yen(ev.fee_per_person) : ''}${ev.compe_fee != null ? ' + コンペ費' + yen(ev.compe_fee) : ''} = ${yen(total)}`
+        + (ev.small_group_fee ? `（1組2名のときはプレーフィー +${yen(ev.small_group_fee)}）` : '') : null,
+    ev.includes ? '含まれるもの：' + ev.includes : null,
+    ev.payment_note ? '集金：' + ev.payment_note : null
   ].filter(Boolean);
   const infoCard = (infoLines.length || ev.cancel_policy || ev.notes_admin || ev.notes_line) ? el('div', { class: 'card' },
     el('strong', {}, 'ゴルフ場の予約内容'),

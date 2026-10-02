@@ -22,7 +22,7 @@ const TOOL = {
     properties: {
       event_date: { type: ['string', 'null'], description: 'プレー日 YYYY-MM-DD' },
       course_name: { type: ['string', 'null'], description: 'ゴルフ場名' },
-      plan_name: { type: ['string', 'null'] },
+      includes: { type: ['string', 'null'], description: '料金に含まれるもの（昼食付、セルフ、乗用カートなど）を「・」区切りで。プラン名やアイコンから分かる範囲だけ' },
       fee_per_person: { type: ['integer', 'null'], description: 'お一人様の総額（円）' },
       small_group_fee: { type: ['integer', 'null'], description: '1組2名のときの、お一人様あたりの追加料金（円）' },
       cancel_policy: { type: ['string', 'null'], description: 'キャンセル料の規定を1〜3行で' },
