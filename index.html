@@ -948,25 +948,34 @@ async function viewImport() {
 /* ====== ニアピン・ドラコン ====== */
 async function viewSpecial(id) {
   const sb = state.sb;
-  const [evR, enR, spR] = await Promise.all([
+  const [evR, enR, spR, grR] = await Promise.all([
     sb.from('events').select('id,name,event_date,course_name').eq('id', id).single(),
     sb.from('entries').select('id,name,last_kana,attendance,approval').eq('event_id', id),
-    sb.from('special_records').select('*').eq('event_id', id)
+    sb.from('special_records').select('*').eq('event_id', id),
+    sb.from('groups').select('id,start_course').eq('event_id', id)
   ]);
   const ev = must(evR), entries = must(enR).filter((e) => e.approval === 'approved');
   let recs = must(spR);
+  const grs = must(grR);
+  const gm = grs.length ? must(await sb.from('group_members').select('group_id,entry_id').in('group_id', grs.map((g) => g.id))) : [];
+  const courseOfEntry = new Map(gm.map((m) => [m.entry_id, (grs.find((g) => g.id === m.group_id) || {}).start_course]));
   const people = entries.filter((e) => e.attendance === 'join')
     .sort((a, b) => String(a.last_kana || a.name).localeCompare(String(b.last_kana || b.name), 'ja'));
   const nameOf = (eid) => { const e = entries.find((x) => x.id === eid); return e ? e.name : null; };
   const KIND = { nearpin: 'ニアピン', drive: 'ドラコン' };
-  const sorted = () => [...recs].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'nearpin' ? -1 : 1)
+  const COURSE_RANK = { OUT: 0, IN: 1 };
+  const scopeName = (c) => (c ? c + 'スタート組' : '全体');
+  const sorted = () => [...recs].sort((a, b) => (COURSE_RANK[a.course] ?? 2) - (COURSE_RANK[b.course] ?? 2)
+    || (a.kind === b.kind ? 0 : a.kind === 'nearpin' ? -1 : 1)
     || (a.hole_no ?? 99) - (b.hole_no ?? 99) || String(a.created_at).localeCompare(String(b.created_at)));
-  const title = (r) => `${KIND[r.kind]}　${r.hole_no ? r.hole_no + '番ホール' : 'ホール未定'}`;
+  const title = (r) => `${r.course ? r.course + '　' : ''}${KIND[r.kind]}　${r.hole_no ? r.hole_no + '番ホール' : 'ホール未定'}`;
   const resultText = () => {
     const lines = [`【${ev.name} ${KIND.nearpin}・${KIND.drive}】`];
+    let cur = '__';
     for (const r of sorted()) {
+      if ((r.course || '') !== cur) { cur = r.course || ''; if (recs.some((x) => x.course)) lines.push('', `■${scopeName(r.course)}`); }
       const w = r.winner_entry_id ? nameOf(r.winner_entry_id) : null;
-      lines.push(`${title(r).replace('　', ' ')}：` + (w ? w + 'さん' + (r.record ? `（${r.record}）` : '') + (r.note ? ` ${r.note}` : '') : '（未定）'));
+      lines.push(`${KIND[r.kind]} ${r.hole_no ? r.hole_no + '番ホール' : 'ホール未定'}：` + (w ? w + 'さん' + (r.record ? `（${r.record}）` : '') + (r.note ? ` ${r.note}` : '') : '（未定）'));
     }
     return lines.join('\n');
   };
@@ -974,6 +983,8 @@ async function viewSpecial(id) {
   const root = el('div', {});
   const kindSel = el('select', {}, el('option', { value: 'nearpin' }, 'ニアピン'), el('option', { value: 'drive' }, 'ドラコン'));
   const holeIn = el('input', { type: 'number', inputmode: 'numeric', placeholder: '例：7（当日まで未定なら空のまま）' });
+  const scopeSel = el('select', {}, el('option', { value: 'all' }, '全体（1つだけ）'),
+    el('option', { value: 'both' }, 'OUT組とIN組、それぞれで'), el('option', { value: 'OUT' }, 'OUT組だけ'), el('option', { value: 'IN' }, 'IN組だけ'));
 
   const save = (r, patch) => guard(async () => {
     must(await sb.from('special_records').update(patch).eq('id', r.id));
@@ -981,9 +992,10 @@ async function viewSpecial(id) {
     toast('保存しました');
   });
   const card = (r) => {
+    const pool = r.course && people.some((e) => courseOfEntry.get(e.id) === r.course) ? people.filter((e) => courseOfEntry.get(e.id) === r.course) : people;
     const win = el('select', {}, el('option', { value: '' }, '未定'),
-      ...people.map((e) => el('option', { value: e.id }, e.name)));
-    if (r.winner_entry_id && !people.some((e) => e.id === r.winner_entry_id) && nameOf(r.winner_entry_id))
+      ...pool.map((e) => el('option', { value: e.id }, e.name)));
+    if (r.winner_entry_id && !pool.some((e) => e.id === r.winner_entry_id) && nameOf(r.winner_entry_id))
       win.append(el('option', { value: r.winner_entry_id }, nameOf(r.winner_entry_id)));
     win.value = r.winner_entry_id || '';
     win.addEventListener('change', () => save(r, { winner_entry_id: win.value || null }));
@@ -1016,11 +1028,14 @@ async function viewSpecial(id) {
       el('div', { class: 'card' },
         el('strong', {}, '追加する'),
         el('label', {}, '種類'), kindSel, el('label', {}, 'ホール番号'), holeIn,
+        el('label', {}, '対象（OUT・INが同時スタートのとき）'), scopeSel,
         el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(async () => {
           const n = numOrNull(holeIn.value);
           if (n != null && (n < 1 || n > 36)) return toast('ホール番号は1〜36です');
-          const row = must(await sb.from('special_records').insert({ event_id: id, kind: kindSel.value, hole_no: n }).select().single());
-          recs.push(row); holeIn.value = ''; draw();
+          const courses = scopeSel.value === 'all' ? [null] : scopeSel.value === 'both' ? ['OUT', 'IN'] : [scopeSel.value];
+          const rows = courses.map((c) => (c ? { event_id: id, kind: kindSel.value, hole_no: n, course: c } : { event_id: id, kind: kindSel.value, hole_no: n }));
+          const made = must(await sb.from('special_records').insert(rows).select());
+          recs.push(...made); holeIn.value = ''; draw();
         }) }, '追加'))),
       recs.length ? el('button', { class: 'btn block', onclick: () => copyText(resultText()) }, 'LINE用の結果をコピー') : null);
   }
