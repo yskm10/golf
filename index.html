@@ -352,6 +352,7 @@ async function routeAdmin() {
   else if (a === 'event' && c === 'edit') view = () => viewEventForm(b);
   else if (a === 'event' && c === 'groups') view = () => viewGroups(b);
   else if (a === 'event' && c === 'print') view = () => viewPrint(b);
+  else if (a === 'event' && c === 'special') view = () => viewSpecial(b);
   else if (a === 'event' && b) view = () => viewEvent(b);
   else if (a === 'players' && b === 'import') { active = 'players'; view = viewImport; }
   else if (a === 'players') { active = 'players'; view = viewPlayers; }
@@ -800,6 +801,7 @@ async function viewEvent(id) {
         ? el('div', {}, el('b', {}, partyJoin), el('span', {}, '打上げ'))
         : el('div', {}, el('b', {}, pending.length), el('span', {}, '承認待ち'))),
     el('a', { class: 'btn pri block', style: 'margin-top:10px', href: `#/event/${id}/groups` }, `👥 組分けする（参加${joined.length}人・枠${slots.length}組）`),
+    el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/special` }, '🎯 ニアピン・ドラコン'),
     infoCard,
     slotsCard,
     el('div', { class: 'card' },
@@ -940,6 +942,94 @@ async function viewImport() {
       })
     }, '取り込む')),
     el('p', {}, el('a', { class: 'btn block', href: '#/players' }, 'キャンセル'))
+  ];
+}
+
+/* ====== ニアピン・ドラコン ====== */
+async function viewSpecial(id) {
+  const sb = state.sb;
+  const [evR, enR, spR] = await Promise.all([
+    sb.from('events').select('id,name,event_date,course_name').eq('id', id).single(),
+    sb.from('entries').select('id,name,last_kana,attendance,approval').eq('event_id', id),
+    sb.from('special_records').select('*').eq('event_id', id)
+  ]);
+  const ev = must(evR), entries = must(enR).filter((e) => e.approval === 'approved');
+  let recs = must(spR);
+  const people = entries.filter((e) => e.attendance === 'join')
+    .sort((a, b) => String(a.last_kana || a.name).localeCompare(String(b.last_kana || b.name), 'ja'));
+  const nameOf = (eid) => { const e = entries.find((x) => x.id === eid); return e ? e.name : null; };
+  const KIND = { nearpin: 'ニアピン', drive: 'ドラコン' };
+  const sorted = () => [...recs].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'nearpin' ? -1 : 1)
+    || (a.hole_no ?? 99) - (b.hole_no ?? 99) || String(a.created_at).localeCompare(String(b.created_at)));
+  const title = (r) => `${KIND[r.kind]}　${r.hole_no ? r.hole_no + '番ホール' : 'ホール未定'}`;
+  const resultText = () => {
+    const lines = [`【${ev.name} ${KIND.nearpin}・${KIND.drive}】`];
+    for (const r of sorted()) {
+      const w = r.winner_entry_id ? nameOf(r.winner_entry_id) : null;
+      lines.push(`${title(r).replace('　', ' ')}：` + (w ? w + 'さん' + (r.record ? `（${r.record}）` : '') + (r.note ? ` ${r.note}` : '') : '（未定）'));
+    }
+    return lines.join('\n');
+  };
+
+  const root = el('div', {});
+  const kindSel = el('select', {}, el('option', { value: 'nearpin' }, 'ニアピン'), el('option', { value: 'drive' }, 'ドラコン'));
+  const holeIn = el('input', { type: 'number', inputmode: 'numeric', placeholder: '例：7（当日まで未定なら空のまま）' });
+
+  const save = (r, patch) => guard(async () => {
+    must(await sb.from('special_records').update(patch).eq('id', r.id));
+    Object.assign(r, patch);
+    toast('保存しました');
+  });
+  const card = (r) => {
+    const win = el('select', {}, el('option', { value: '' }, '未定'),
+      ...people.map((e) => el('option', { value: e.id }, e.name)));
+    if (r.winner_entry_id && !people.some((e) => e.id === r.winner_entry_id) && nameOf(r.winner_entry_id))
+      win.append(el('option', { value: r.winner_entry_id }, nameOf(r.winner_entry_id)));
+    win.value = r.winner_entry_id || '';
+    win.addEventListener('change', () => save(r, { winner_entry_id: win.value || null }));
+    const hole = el('input', { type: 'number', inputmode: 'numeric', value: r.hole_no ?? '', placeholder: '未定' });
+    hole.addEventListener('change', () => {
+      const n = numOrNull(hole.value);
+      if (n != null && (n < 1 || n > 36)) { toast('ホール番号は1〜36です'); hole.value = r.hole_no ?? ''; return; }
+      save(r, { hole_no: n }).then(draw);
+    });
+    const rec = el('input', { value: r.record || '', placeholder: r.kind === 'nearpin' ? '例：1.35m' : '例：285y' });
+    rec.addEventListener('change', () => save(r, { record: strOrNull(rec.value) }));
+    const note = el('input', { value: r.note || '', placeholder: '例：女性 / シニア / 同スコア' });
+    note.addEventListener('change', () => save(r, { note: strOrNull(note.value) }));
+    return el('div', { class: 'card' },
+      el('div', { class: 'row between' }, el('strong', {}, title(r)),
+        el('button', { class: 'btn sm', onclick: () => guard(async () => {
+          if (!confirm(title(r) + ' を削除しますか？')) return;
+          must(await sb.from('special_records').delete().eq('id', r.id));
+          recs = recs.filter((x) => x.id !== r.id); draw();
+        }) }, '削除')),
+      el('label', {}, 'ホール番号'), hole,
+      el('label', {}, '受賞者'), win,
+      el('label', {}, '記録'), rec,
+      el('label', {}, 'メモ（任意）'), note);
+  };
+  function draw() {
+    root.replaceChildren(
+      ...sorted().map(card),
+      !recs.length ? el('div', { class: 'card muted' }, 'まだありません。下から追加してください。') : null,
+      el('div', { class: 'card' },
+        el('strong', {}, '追加する'),
+        el('label', {}, '種類'), kindSel, el('label', {}, 'ホール番号'), holeIn,
+        el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(async () => {
+          const n = numOrNull(holeIn.value);
+          if (n != null && (n < 1 || n > 36)) return toast('ホール番号は1〜36です');
+          const row = must(await sb.from('special_records').insert({ event_id: id, kind: kindSel.value, hole_no: n }).select().single());
+          recs.push(row); holeIn.value = ''; draw();
+        }) }, '追加'))),
+      recs.length ? el('button', { class: 'btn block', onclick: () => copyText(resultText()) }, 'LINE用の結果をコピー') : null);
+  }
+  draw();
+  return [
+    el('div', { class: 'row between' },
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, 'ニアピン・ドラコン'), el('div', { class: 'muted' }, ev.name)),
+      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    root
   ];
 }
 
