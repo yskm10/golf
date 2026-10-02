@@ -55,6 +55,18 @@ label.chk input{width:auto}
 details{margin-top:10px}
 summary{cursor:pointer;color:var(--g);font-size:15px;padding:6px 0}
 .center{text-align:center;padding:40px 12px}
+.mem{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:9px 10px;border:1px solid var(--bd);border-radius:10px;margin-top:6px;background:#fff;cursor:pointer}
+.mem small{color:var(--mu)}
+.mem.sel{outline:3px solid #f9a825;background:#fff8e1}
+.mem.gone{opacity:.5;text-decoration:line-through}
+.gcard{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px;margin:10px 0}
+.gcard.locked{background:#eef3ef}
+.gcard.drop{border-color:#f9a825}
+.warn{background:#fde8c8;color:#8a4b00}
+table.pt{width:100%;border-collapse:collapse;font-size:14px}
+table.pt th,table.pt td{border:1px solid #333;padding:6px 6px;text-align:left}
+table.pt th{background:#eee}
+@media print{header,.tabs,.no-print,.toast{display:none!important}body{background:#fff}main{padding:0!important;max-width:none!important}table.pt{font-size:12pt}tr{break-inside:avoid}}
 </style>
 </head>
 <body>
@@ -336,6 +348,8 @@ async function routeAdmin() {
   if (a === 'events') view = viewEvents;
   else if (a === 'event' && b === 'new') view = () => viewEventForm(null);
   else if (a === 'event' && c === 'edit') view = () => viewEventForm(b);
+  else if (a === 'event' && c === 'groups') view = () => viewGroups(b);
+  else if (a === 'event' && c === 'print') view = () => viewPrint(b);
   else if (a === 'event' && b) view = () => viewEvent(b);
   else if (a === 'players' && b === 'import') { active = 'players'; view = viewImport; }
   else if (a === 'players') { active = 'players'; view = viewPlayers; }
@@ -777,6 +791,7 @@ async function viewEvent(id) {
       ev.has_party
         ? el('div', {}, el('b', {}, partyJoin), el('span', {}, '打上げ'))
         : el('div', {}, el('b', {}, pending.length), el('span', {}, '承認待ち'))),
+    el('a', { class: 'btn pri block', style: 'margin-top:10px', href: `#/event/${id}/groups` }, `👥 組分けする（参加${joined.length}人・枠${slots.length}組）`),
     infoCard,
     slotsCard,
     el('div', { class: 'card' },
@@ -917,6 +932,294 @@ async function viewImport() {
       })
     }, '取り込む')),
     el('p', {}, el('a', { class: 'btn block', href: '#/players' }, 'キャンセル'))
+  ];
+}
+
+/* ====== 組分け ====== */
+const noZeroT = (t) => String(t || '').replace(/^0/, '');
+const slotOrder = (a, b) => String(a.start_time || '').localeCompare(String(b.start_time || ''))
+  || (a.start_course === b.start_course ? 0 : (a.start_course === 'OUT' ? -1 : 1)) || a.group_no - b.group_no;
+
+async function loadGroupData(id) {
+  const sb = state.sb;
+  const [evR, enR, plR, grR] = await Promise.all([
+    sb.from('events').select('*').eq('id', id).single(),
+    sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved'),
+    sb.from('players').select('*'),
+    sb.from('groups').select('*').eq('event_id', id)
+  ]);
+  const ev = must(evR), entries = must(enR), players = must(plR), slots = must(grR);
+  slots.sort(slotOrder);
+  const ids = slots.map((g) => g.id);
+  const members = ids.length ? must(await sb.from('group_members').select('*').in('group_id', ids)) : [];
+  const pBy = new Map(players.map((p) => [p.id, p]));
+  const eff = (e) => {
+    const p = pBy.get(e.player_id) || {};
+    return { aff: e.affiliation ?? p.affiliation ?? null, avg: e.avg_score ?? p.avg_score ?? null, tee: e.tee ?? p.tee ?? null };
+  };
+  return { ev, entries, slots, members, eff };
+}
+
+// 平均スコアをそろえ、同じ所属が同じ組に偏らないよう振り分ける
+function autoAssign(people, g, wScore, wAff) {
+  const known = people.map((p) => p.avg).filter((v) => v != null).sort((a, b) => a - b);
+  const med = known.length ? known[Math.floor(known.length / 2)] : 100;
+  const P = people.map((p) => ({ id: p.id, s: p.avg ?? med, a: p.aff ? noSpace(p.aff).toLowerCase() : null }));
+  const N = P.length, base = Math.floor(N / g), extra = N % g;
+  const caps = Array.from({ length: g }, (_, i) => base + (i < extra ? 1 : 0));
+  const mean = P.reduce((t, p) => t + p.s, 0) / N;
+  const G = Array.from({ length: g }, () => []);
+  const sum = (l) => l.reduce((t, p) => t + p.s, 0);
+  for (const p of [...P].sort((x, y) => y.s - x.s)) {
+    let best = -1, bv = Infinity;
+    for (let i = 0; i < g; i++) {
+      if (G[i].length >= caps[i]) continue;
+      const v = sum(G[i]) / caps[i];
+      if (v < bv) { bv = v; best = i; }
+    }
+    G[best].push(p);
+  }
+  const gcost = (l) => {
+    if (!l.length) return 0;
+    const avg = sum(l) / l.length;
+    let c = wScore * (avg - mean) * (avg - mean) * l.length;
+    const cnt = new Map();
+    for (const p of l) if (p.a) cnt.set(p.a, (cnt.get(p.a) || 0) + 1);
+    for (const v of cnt.values()) c += wAff * 30 * v * (v - 1) / 2;
+    return c;
+  };
+  if (g > 1) {
+    const iters = 12000;
+    for (let it = 0; it < iters; it++) {
+      const T = 20 * Math.pow(0.005, it / iters);
+      const i = Math.floor(Math.random() * g);
+      let j = Math.floor(Math.random() * (g - 1)); if (j >= i) j++;
+      const a = Math.floor(Math.random() * G[i].length), b = Math.floor(Math.random() * G[j].length);
+      const before = gcost(G[i]) + gcost(G[j]);
+      [G[i][a], G[j][b]] = [G[j][b], G[i][a]];
+      const delta = gcost(G[i]) + gcost(G[j]) - before;
+      if (delta > 0 && Math.random() >= Math.exp(-delta / T)) [G[i][a], G[j][b]] = [G[j][b], G[i][a]];
+    }
+  }
+  return G.map((l) => l.sort((x, y) => y.s - x.s).map((p) => p.id));
+}
+
+function groupsAnnouncement(d) {
+  const { ev, entries, slots, members } = d;
+  const eBy = new Map(entries.map((e) => [e.id, e]));
+  const num = (n) => Number(n).toLocaleString('ja-JP');
+  const lines = [`【${ev.name} 組合せ】`, fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : ''), ''];
+  let twos = 0;
+  for (const g of slots) {
+    const ms = members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
+      .map((m) => eBy.get(m.entry_id)).filter((e) => e && e.attendance === 'join');
+    if (!ms.length) continue;
+    if (ms.length === 2) twos++;
+    lines.push(`${g.group_no}組 ${g.start_course || ''} ${noZeroT(hhmm(g.start_time))}`);
+    lines.push('　' + ms.map((e) => noSpace(e.name)).join('、'));
+  }
+  const bySelf = ev.playfee_by_self !== false;
+  const foot = [];
+  if (ev.compe_fee != null) foot.push(`コンペ費：${num(ev.compe_fee)}円` + (ev.payment_note ? `（${ev.payment_note}）` : ''));
+  if (ev.fee_per_person != null) {
+    if (ev.compe_fee != null && !bySelf) foot.splice(0, 1, `参加費：${num(ev.fee_per_person + ev.compe_fee)}円（プレーフィー${num(ev.fee_per_person)}円＋コンペ費${num(ev.compe_fee)}円）` + (ev.payment_note ? `／${ev.payment_note}` : ''));
+    else foot.push(bySelf ? `プレーフィー：${num(ev.fee_per_person)}円（各自ゴルフ場で精算）` : `参加費：${num(ev.fee_per_person)}円` + (ev.payment_note ? `（${ev.payment_note}）` : ''));
+  }
+  if (ev.includes) foot.push('内容：' + ev.includes);
+  if (twos && ev.small_group_fee) foot.push(`※2名の組は、プレーフィーが1人あたり +${num(ev.small_group_fee)}円`);
+  if (foot.length) lines.push('', ...foot);
+  if (ev.notes_line) lines.push('', ev.notes_line);
+  return lines.join('\n');
+}
+
+async function viewGroups(id) {
+  let d = await loadGroupData(id);
+  const sb = state.sb;
+  const saved = (() => { try { return JSON.parse(ls.get('golf_auto_opts') || '{}'); } catch (e) { return {}; } })();
+  const optAff = el('select', { value: saved.aff || 'normal' },
+    el('option', { value: 'strong' }, '強く分ける'), el('option', { value: 'normal' }, 'ふつう'),
+    el('option', { value: 'weak' }, '弱め'), el('option', { value: 'off' }, '考えない'));
+  const optScore = el('select', { value: saved.score || 'normal' },
+    el('option', { value: 'strong' }, '強くそろえる'), el('option', { value: 'normal' }, 'ふつう'), el('option', { value: 'weak' }, '弱め'));
+  let selected = null;
+  const root = el('div', {});
+
+  const eBy = () => new Map(d.entries.map((e) => [e.id, e]));
+  const memRow = (entryId) => d.members.find((m) => m.entry_id === entryId) || null;
+  const groupOf = (entryId) => { const m = memRow(entryId); return m ? d.slots.find((g) => g.id === m.group_id) : null; };
+  const reload = async () => { d.members = must(await sb.from('group_members').select('*').in('group_id', d.slots.map((g) => g.id))); };
+  const done = async () => { selected = null; await reload(); draw(); };
+
+  const chip = (e) => {
+    const f = d.eff(e);
+    const gone = e.attendance !== 'join';
+    return el('div', { class: 'mem' + (selected === e.id ? ' sel' : '') + (gone ? ' gone' : ''), onclick: () => onChip(e) },
+      teeDot(f.tee), el('strong', {}, e.name),
+      el('small', {}, [f.aff, f.avg != null ? '平均' + f.avg : null, gone ? (e.attendance === 'cancelled' ? '当日キャンセル' : '欠席') : null].filter(Boolean).join(' ・ ')));
+  };
+
+  const onChip = (e) => guard(async () => {
+    const ga = selected ? groupOf(selected) : null;
+    const gb = groupOf(e.id);
+    if (gb && gb.locked) return toast('この組はロック中です');
+    if (!selected) { selected = e.id; return draw(); }
+    if (selected === e.id) { selected = null; return draw(); }
+    if (ga && ga.locked) { selected = null; draw(); return toast('選んでいた人の組がロック中です'); }
+    if ((ga && gb && ga.id === gb.id) || (!ga && !gb)) { selected = e.id; return draw(); }
+    const ma = memRow(selected), mb = memRow(e.id);
+    if (ma && mb) {
+      must(await sb.from('group_members').update({ group_id: gb.id }).eq('id', ma.id));
+      must(await sb.from('group_members').update({ group_id: ga.id }).eq('id', mb.id));
+    } else if (ma && !mb) {
+      must(await sb.from('group_members').delete().eq('id', ma.id));
+      must(await sb.from('group_members').insert({ group_id: ga.id, entry_id: e.id, position: ma.position }));
+    } else {
+      must(await sb.from('group_members').delete().eq('id', mb.id));
+      must(await sb.from('group_members').insert({ group_id: gb.id, entry_id: selected, position: mb.position }));
+    }
+    await done();
+  });
+
+  const moveTo = (g) => guard(async () => {
+    const ma = memRow(selected), ga = groupOf(selected);
+    if (ga && ga.locked) return toast('選んでいた人の組がロック中です');
+    const cnt = d.members.filter((m) => m.group_id === g.id).length;
+    if (cnt >= 4) return toast('この組は4人で満員です');
+    const pos = Math.max(-1, ...d.members.filter((m) => m.group_id === g.id).map((m) => m.position)) + 1;
+    if (ma) must(await sb.from('group_members').update({ group_id: g.id, position: pos }).eq('id', ma.id));
+    else must(await sb.from('group_members').insert({ group_id: g.id, entry_id: selected, position: pos }));
+    await done();
+  });
+  const unassign = () => guard(async () => {
+    const ma = memRow(selected), ga = groupOf(selected);
+    if (ga && ga.locked) return toast('選んでいた人の組がロック中です');
+    if (ma) must(await sb.from('group_members').delete().eq('id', ma.id));
+    await done();
+  });
+  const toggleLock = (g) => guard(async () => {
+    must(await sb.from('groups').update({ locked: !g.locked }).eq('id', g.id));
+    g.locked = !g.locked;
+    draw();
+  });
+
+  const runAuto = () => guard(async () => {
+    const W = { aff: { strong: 3, normal: 1, weak: 0.4, off: 0 }, score: { strong: 2, normal: 1, weak: 0.3 } };
+    ls.set('golf_auto_opts', JSON.stringify({ aff: optAff.value, score: optScore.value }));
+    const lockedIds = new Set(d.slots.filter((g) => g.locked).map((g) => g.id));
+    const lockedEntries = new Set(d.members.filter((m) => lockedIds.has(m.group_id)).map((m) => m.entry_id));
+    const people = d.entries.filter((e) => e.attendance === 'join' && !lockedEntries.has(e.id))
+      .map((e) => { const f = d.eff(e); return { id: e.id, avg: f.avg, aff: f.aff }; });
+    const targets = d.slots.filter((g) => !g.locked);
+    if (!people.length) return toast('組分けする参加者がいません');
+    if (!targets.length) return toast('スタート枠がありません（ロックを外してください）');
+    if (people.length > targets.length * 4) return toast(`枠が足りません（${people.length}人に対して最大${targets.length * 4}人）`);
+    const hasOld = d.members.some((m) => !lockedIds.has(m.group_id));
+    if (hasOld && !confirm('ロックしていない組を、作り直します。よろしいですか？')) return;
+    const g = Math.min(targets.length, Math.max(1, Math.ceil(people.length / 4)));
+    const result = autoAssign(people, g, W.score[optScore.value], W.aff[optAff.value]);
+    const useIds = targets.map((t) => t.id);
+    must(await sb.from('group_members').delete().in('group_id', useIds));
+    const rows = [];
+    result.forEach((ids, gi) => ids.forEach((eid, pi) => rows.push({ group_id: targets[gi].id, entry_id: eid, position: pi })));
+    must(await sb.from('group_members').insert(rows));
+    toast(`${people.length}人を${g}組に振り分けました`);
+    await done();
+  });
+
+  function draw() {
+    const emap = eBy();
+    const joined = d.entries.filter((e) => e.attendance === 'join');
+    const assignedIds = new Set(d.members.map((m) => m.entry_id));
+    const unassigned = joined.filter((e) => !assignedIds.has(e.id));
+    const selGroup = selected ? groupOf(selected) : null;
+    const cap = d.slots.length * 4;
+    const nodes = [];
+
+    nodes.push(el('div', { class: 'stats', style: 'grid-template-columns:repeat(3,1fr)' },
+      el('div', {}, el('b', {}, joined.length), el('span', {}, `参加（枠は${d.slots.length}組・最大${cap}人）`)),
+      el('div', {}, el('b', {}, joined.length - unassigned.length), el('span', {}, '配置済み')),
+      el('div', {}, el('b', {}, unassigned.length), el('span', {}, '未配置'))));
+
+    nodes.push(el('div', { class: 'card' },
+      el('strong', {}, '自動で組分け'),
+      el('p', { class: 'muted' }, 'ロックした組はそのまま、残りの人を、平均スコアがそろうように振り分けます。人数が4の倍数でないときは3人組にします。'),
+      el('div', { class: 'row', style: 'flex-wrap:nowrap' },
+        el('div', { class: 'grow' }, el('label', {}, '同じ所属'), optAff),
+        el('div', { class: 'grow' }, el('label', {}, '組の強さ'), optScore)),
+      el('p', {}, el('button', { class: 'btn pri block', onclick: runAuto }, '自動で組分けする')),
+      el('div', { class: 'row' },
+        el('button', { class: 'btn sm', onclick: () => copyText(groupsAnnouncement(d)) }, 'LINE用の組表をコピー'),
+        el('a', { class: 'btn sm', href: `#/event/${id}/print` }, '印刷用を開く'))));
+
+    if (selected) {
+      const e = emap.get(selected);
+      nodes.push(el('div', { class: 'card', style: 'background:#fff8e1;border-color:#f9a825' },
+        el('div', { class: 'row between' },
+          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、または移動先の組のボタンを押します。`),
+          el('button', { class: 'btn sm', onclick: () => { selected = null; draw(); } }, '選択をやめる'))));
+    }
+
+    nodes.push(el('div', { class: 'gcard' + (selected && selGroup ? ' drop' : '') },
+      el('div', { class: 'row between' }, el('strong', {}, `未配置（${unassigned.length}人）`),
+        (selected && selGroup) ? el('button', { class: 'btn sm', onclick: unassign }, '未配置に戻す') : null),
+      unassigned.length ? unassigned.map(chip) : el('div', { class: 'muted' }, 'なし')));
+
+    for (const g of d.slots) {
+      const ms = d.members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
+        .map((m) => emap.get(m.entry_id)).filter(Boolean);
+      const active = ms.filter((e) => e.attendance === 'join');
+      const scores = active.map((e) => d.eff(e).avg).filter((v) => v != null);
+      const avg = scores.length ? (scores.reduce((t, v) => t + v, 0) / scores.length).toFixed(1) : null;
+      const unknown = active.length - scores.length;
+      const canDrop = selected && !g.locked && (!selGroup || selGroup.id !== g.id) && ms.length < 4;
+      nodes.push(el('div', { class: 'gcard' + (g.locked ? ' locked' : '') + (canDrop ? ' drop' : '') },
+        el('div', { class: 'row between' },
+          el('div', {}, el('strong', {}, `${g.group_no}組　${g.start_course || ''} ${noZeroT(hhmm(g.start_time))}`), ' ',
+            active.length === 2 && el('span', { class: 'badge warn' }, '2名組'), ' ',
+            el('span', { class: 'muted' }, (avg ? `平均${avg}` : '') + (unknown ? `（不明${unknown}人）` : ''))),
+          el('button', { class: 'btn sm', onclick: () => toggleLock(g) }, g.locked ? '🔒 ロック中' : 'ロックする')),
+        ms.length ? ms.map(chip) : el('div', { class: 'muted' }, '空き'),
+        canDrop && el('button', { class: 'btn sm block', style: 'margin-top:8px', onclick: () => moveTo(g) }, `ここに入れる（${ms.length}/4）`)));
+    }
+    root.replaceChildren(...nodes);
+  }
+
+  if (!d.slots.length) {
+    return [el('div', { class: 'row between' }, el('h2', {}, '組分け'), el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+      el('div', { class: 'card' }, 'スタート枠が未登録です。コンペ画面で、スタート枠を登録してください。')];
+  }
+  draw();
+  return [
+    el('div', { class: 'row between' },
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '組分け'), el('div', { class: 'muted' }, d.ev.name)),
+      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    root
+  ];
+}
+
+async function viewPrint(id) {
+  const d = await loadGroupData(id);
+  const emap = new Map(d.entries.map((e) => [e.id, e]));
+  const rows = d.slots.map((g) => {
+    const ms = d.members.filter((m) => m.group_id === g.id).sort((a, b) => a.position - b.position)
+      .map((m) => emap.get(m.entry_id)).filter((e) => e && e.attendance === 'join');
+    const cells = [0, 1, 2, 3].map((i) => {
+      const e = ms[i];
+      if (!e) return el('td', {}, '');
+      const t = d.eff(e).tee;
+      return el('td', {}, e.name, t && TEE[t] ? el('small', {}, `（${TEE[t][0]}）`) : null);
+    });
+    return el('tr', {}, el('td', {}, g.group_no), el('td', {}, g.start_course || ''), el('td', {}, noZeroT(hhmm(g.start_time))), ...cells);
+  });
+  return [
+    el('div', { class: 'row between no-print' },
+      el('a', { class: 'btn sm', href: `#/event/${id}/groups` }, '← 組分けに戻る'),
+      el('button', { class: 'btn sm pri', onclick: () => window.print() }, '印刷する')),
+    el('h2', {}, `${d.ev.name} 組合せ`),
+    el('div', { class: 'muted' }, fmtDate(d.ev.event_date) + (d.ev.course_name ? ' ' + d.ev.course_name : '')),
+    el('table', { class: 'pt', style: 'margin-top:10px' },
+      el('thead', {}, el('tr', {}, ['組', 'コース', '時間', '1', '2', '3', '4'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, rows))
   ];
 }
 
