@@ -965,9 +965,12 @@ async function viewSpecial(id) {
   const KIND = { nearpin: 'ニアピン', drive: 'ドラコン' };
   const COURSE_RANK = { OUT: 0, IN: 1 };
   const scopeName = (c) => (c ? c + 'スタート組' : '全体');
+  // 回る順：OUTスタートは1→18番、INスタートは10→18→1→9番の順（ホール未定は最後）
+  const playOrder = (r) => (r.hole_no == null ? 99 : (r.course === 'IN' && r.hole_no <= 9 ? r.hole_no + 18 : r.hole_no));
   const sorted = () => [...recs].sort((a, b) => (COURSE_RANK[a.course] ?? 2) - (COURSE_RANK[b.course] ?? 2)
+    || playOrder(a) - playOrder(b)
     || (a.kind === b.kind ? 0 : a.kind === 'nearpin' ? -1 : 1)
-    || (a.hole_no ?? 99) - (b.hole_no ?? 99) || String(a.created_at).localeCompare(String(b.created_at)));
+    || String(a.created_at).localeCompare(String(b.created_at)));
   const title = (r) => `${r.course ? r.course + '　' : ''}${KIND[r.kind]}　${r.hole_no ? r.hole_no + '番ホール' : 'ホール未定'}`;
   const resultText = () => {
     const lines = [`【${ev.name} ${KIND.nearpin}・${KIND.drive}】`];
