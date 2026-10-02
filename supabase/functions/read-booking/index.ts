@@ -89,7 +89,8 @@ Deno.serve(async (req) => {
       `- 推測しない。書かれていない項目は null。\n- 年が書かれていなければ、今日以降で最も近い日付にする。\n` +
       `- 重複したスタート枠は1つにまとめる。時刻は24時間表記の HH:MM。\n` +
       `- notes_admin: 注意事項・特記事項を読みやすい箇条書きにする。楽天ポイント、チェックイン、スタンプラリー、クーポンの案内は入れない。\n` +
-      `- line_candidates: 同伴者に伝えるべき注意（支払い方法、持ち込み禁止、日没、休憩時間など）を短い1行ずつ。`;
+      `- line_candidates: 同伴者に伝えるべき注意（支払い方法、持ち込み禁止、日没、休憩時間など）を短い1行ずつ。\n` +
+      `必ず save_booking ツールを1回だけ呼んで結果を返す。文章での返答は不要。`;
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -102,7 +103,7 @@ Deno.serve(async (req) => {
         model: MODEL,
         max_tokens: 4096,
         tools: [TOOL],
-        tool_choice: { type: 'tool', name: 'save_booking' },
+        tool_choice: { type: 'auto' },
         messages: [{ role: 'user', content: [...blocks, { type: 'text', text: prompt }] }],
       }),
     });
@@ -113,7 +114,10 @@ Deno.serve(async (req) => {
     }
     const out = await res.json();
     const tool = (out.content ?? []).find((c: { type: string }) => c.type === 'tool_use');
-    if (!tool) return json({ error: 'ai_no_result' }, 502);
+    if (!tool) {
+      console.error('no_tool_use', JSON.stringify(out.content ?? []).slice(0, 300));
+      return json({ error: 'ai_no_result' }, 502);
+    }
     return json({ ok: true, data: tool.input });
   } catch (e) {
     console.error('read-booking error', e);
