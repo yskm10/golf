@@ -410,6 +410,12 @@ async function viewEventForm(id) {
   const playBy = el('select', { value: ev.playfee_by_self === false ? 'organizer' : 'self' },
     el('option', { value: 'self' }, '各自がゴルフ場で精算'),
     el('option', { value: 'organizer' }, '幹事がまとめて集金'));
+  const PAY_SELF = 'スタート前に現金で受付へ', PAY_ORG = '受付で現金で集金';
+  playBy.addEventListener('change', () => {
+    const v = payNote.value.trim();
+    if (playBy.value === 'organizer' && (!v || v === PAY_SELF)) payNote.value = PAY_ORG;
+    else if (playBy.value === 'self' && (!v || v === PAY_ORG)) payNote.value = PAY_SELF;
+  });
   const smallFee = el('input', { type: 'number', inputmode: 'numeric', value: ev.small_group_fee ?? '', placeholder: '例：3300（1組2名のとき1人あたりの追加）' });
   const cancel = el('textarea', { value: ev.cancel_policy || '', placeholder: '例：土日祝は1週間前から1人5,000円、平日は3日前から1人3,000円' });
   const notesAdmin = el('textarea', { value: ev.notes_admin || '', placeholder: '幹事だけが見るメモ（ゴルフ場の注意事項、クーポンURLなど）' });
@@ -668,7 +674,7 @@ async function viewEvent(id) {
   const hasPlay = ev.fee_per_person != null, hasCompe = ev.compe_fee != null;
   const feeLines = [];
   if (hasPlay && hasCompe && !bySelfL) {
-    feeLines.push(`参加費：${num(totalFee)}円（プレーフィー${num(ev.fee_per_person)}円＋コンペ費${num(ev.compe_fee)}円）`);
+    feeLines.push(`参加費：${num(totalFee)}円（プレーフィー＋コンペ費合計）`);
     if (ev.payment_note) feeLines.push('お支払い：' + ev.payment_note);
   } else {
     if (hasCompe) feeLines.push(`コンペ費：${num(ev.compe_fee)}円` + (ev.payment_note ? `（${ev.payment_note}）` : ''));
@@ -680,7 +686,7 @@ async function viewEvent(id) {
     fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : ''),
     times.length ? `スタート：${noZero(times[0])}〜${noZero(times[times.length - 1])}（組は後日お知らせ）` : null,
     ...feeLines,
-    ev.includes ? '内容：' + ev.includes : null,
+    ev.includes ? '料金に含まれるもの：' + ev.includes : null,
     '',
     '出欠のご回答をお願いします🙏',
     formUrl,
@@ -1036,10 +1042,10 @@ function groupsAnnouncement(d) {
   const foot = [];
   if (ev.compe_fee != null) foot.push(`コンペ費：${num(ev.compe_fee)}円` + (ev.payment_note ? `（${ev.payment_note}）` : ''));
   if (ev.fee_per_person != null) {
-    if (ev.compe_fee != null && !bySelf) foot.splice(0, 1, `参加費：${num(ev.fee_per_person + ev.compe_fee)}円（プレーフィー${num(ev.fee_per_person)}円＋コンペ費${num(ev.compe_fee)}円）` + (ev.payment_note ? `／${ev.payment_note}` : ''));
+    if (ev.compe_fee != null && !bySelf) foot.splice(0, 1, `参加費：${num(ev.fee_per_person + ev.compe_fee)}円（プレーフィー＋コンペ費合計）` + (ev.payment_note ? `／${ev.payment_note}` : ''));
     else foot.push(bySelf ? `プレーフィー：${num(ev.fee_per_person)}円（各自ゴルフ場で精算）` : `参加費：${num(ev.fee_per_person)}円` + (ev.payment_note ? `（${ev.payment_note}）` : ''));
   }
-  if (ev.includes) foot.push('内容：' + ev.includes);
+  if (ev.includes) foot.push('料金に含まれるもの：' + ev.includes);
   if (twos && ev.small_group_fee) foot.push(`※2名の組は、プレーフィーが1人あたり +${num(ev.small_group_fee)}円`);
   if (foot.length) lines.push('', ...foot);
   if (ev.notes_line) lines.push('', ev.notes_line);
