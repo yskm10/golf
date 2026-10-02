@@ -577,6 +577,7 @@ async function viewEvent(id) {
 
   const setAtt = (e, v) => guard(async () => {
     must(await sb.from('entries').update({ attendance: v }).eq('id', e.id));
+    if (v !== 'join') await sb.from('group_members').delete().eq('entry_id', e.id);
     refresh();
   });
   const setParty = (e, v) => guard(async () => {
@@ -1161,7 +1162,15 @@ async function loadGroupData(id) {
   const ev = must(evR), entries = must(enR), players = must(plR), slots = must(grR);
   slots.sort(slotOrder);
   const ids = slots.map((g) => g.id);
-  const members = ids.length ? must(await sb.from('group_members').select('*').in('group_id', ids)) : [];
+  let members = ids.length ? must(await sb.from('group_members').select('*').in('group_id', ids)) : [];
+  { // 欠席・キャンセルになった人は、組から外す
+    const joinIds = new Set(entries.filter((e) => e.attendance === 'join').map((e) => e.id));
+    const stale = members.filter((m) => !joinIds.has(m.entry_id));
+    if (stale.length) {
+      await sb.from('group_members').delete().in('id', stale.map((m) => m.id));
+      members = members.filter((m) => joinIds.has(m.entry_id));
+    }
+  }
   let rules = [], rulesOk = true;
   { const rr = await sb.from('group_rules').select('*').eq('event_id', id); if (rr.error) rulesOk = false; else rules = rr.data || []; }
   const pBy = new Map(players.map((p) => [p.id, p]));
@@ -1376,6 +1385,29 @@ async function viewGroups(id) {
     else must(await sb.from('group_members').insert({ group_id: g.id, entry_id: selected, position: pos }));
     await done();
   });
+  const dayCancel = (eid) => guard(async () => {
+    const e = d.entries.find((x) => x.id === eid);
+    if (!e) return;
+    const g = groupOf(eid);
+    if (!confirm(`${e.name}さんを当日キャンセルにします。`)) return;
+    must(await sb.from('entries').update({ attendance: 'cancelled' }).eq('id', eid));
+    await sb.from('group_members').delete().eq('entry_id', eid);
+    e.attendance = 'cancelled';
+    await done();
+    if (g) {
+      const n = d.members.filter((m) => m.group_id === g.id).length;
+      const lab = slotLabels(d.slots).get(g.id);
+      const fee = d.ev.small_group_fee;
+      toast(n === 0 ? `${lab}は誰もいなくなりました` : n === 2 ? `${lab}が2名組になりました` + (fee ? `（追加料金 +${Number(fee).toLocaleString('ja-JP')}円/人）` : '') : `${lab}が${n}人になりました`);
+    }
+  });
+  const restore = (eid) => guard(async () => {
+    const e = d.entries.find((x) => x.id === eid);
+    must(await sb.from('entries').update({ attendance: 'join' }).eq('id', eid));
+    e.attendance = 'join';
+    await done();
+    toast(`${e.name}さんを参加に戻しました（未配置です）`);
+  });
   const unassign = () => guard(async () => {
     const ma = memRow(selected), ga = groupOf(selected);
     if (ga && ga.locked) return toast('選んでいた人の組がロック中です');
@@ -1463,7 +1495,9 @@ async function viewGroups(id) {
       nodes.push(el('div', { class: 'card', style: 'background:#fff8e1;border-color:#f9a825' },
         el('div', { class: 'row between' },
           el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、または移動先の組のボタンを押します。`),
-          el('button', { class: 'btn sm', onclick: () => { selected = null; draw(); } }, '選択をやめる'))));
+          el('div', { class: 'row' },
+            el('button', { class: 'btn sm', onclick: () => dayCancel(selected) }, '当日キャンセルにする'),
+            el('button', { class: 'btn sm', onclick: () => { selected = null; draw(); } }, '選択をやめる')))));
     }
 
     nodes.push(el('div', { class: 'gcard' + (selected && selGroup ? ' drop' : '') },
@@ -1482,13 +1516,18 @@ async function viewGroups(id) {
       nodes.push(el('div', { class: 'gcard' + (g.locked ? ' locked' : '') + (canDrop ? ' drop' : '') },
         el('div', { class: 'row between' },
           el('div', {}, el('strong', {}, `${lab.get(g.id)}　${noZeroT(hhmm(g.start_time))}`), ' ',
-            active.length === 2 && el('span', { class: 'badge warn' }, '2名組'), ' ',
+            (active.length === 2 || active.length === 1) && el('span', { class: 'badge warn' }, active.length === 1 ? '1名' : '2名組' + (d.ev.small_group_fee ? ` +${Number(d.ev.small_group_fee).toLocaleString('ja-JP')}円` : '')), ' ',
+            active.length === 3 && el('span', { class: 'badge' }, '3人'), ' ',
             badRule(g) && el('span', { class: 'badge warn' }, '⚠ ルール'), ' ',
             el('span', { class: 'muted' }, (avg ? `平均${avg}` : '') + (unknown ? `（不明${unknown}人）` : ''))),
           el('button', { class: 'btn sm', onclick: () => toggleLock(g) }, g.locked ? '🔒 ロック中' : 'ロックする')),
         ms.length ? ms.map(chip) : el('div', { class: 'muted' }, '空き'),
         canDrop && el('button', { class: 'btn sm block', style: 'margin-top:8px', onclick: () => moveTo(g) }, `ここに入れる（${ms.length}/4）`)));
     }
+    const cx = d.entries.filter((e) => e.attendance === 'cancelled');
+    if (cx.length) nodes.push(el('div', { class: 'gcard' }, el('strong', {}, `当日キャンセル（${cx.length}人）`),
+      cx.map((e) => el('div', { class: 'row between', style: 'padding:6px 0' }, el('span', {}, e.name),
+        el('button', { class: 'btn sm', onclick: () => restore(e.id) }, '参加に戻す')))));
     root.replaceChildren(...nodes);
   }
 
