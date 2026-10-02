@@ -353,6 +353,7 @@ async function routeAdmin() {
   else if (a === 'event' && c === 'groups') view = () => viewGroups(b);
   else if (a === 'event' && c === 'print') view = () => viewPrint(b);
   else if (a === 'event' && c === 'special') view = () => viewSpecial(b);
+  else if (a === 'event' && c === 'collect') view = () => viewCollect(b);
   else if (a === 'event' && b) view = () => viewEvent(b);
   else if (a === 'players' && b === 'import') { active = 'players'; view = viewImport; }
   else if (a === 'players') { active = 'players'; view = viewPlayers; }
@@ -802,6 +803,7 @@ async function viewEvent(id) {
         : el('div', {}, el('b', {}, pending.length), el('span', {}, '承認待ち'))),
     el('a', { class: 'btn pri block', style: 'margin-top:10px', href: `#/event/${id}/groups` }, `👥 組分けする（参加${joined.length}人・枠${slots.length}組）`),
     el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/special` }, '🎯 ニアピン・ドラコン'),
+    el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/collect` }, '💴 集金チェック'),
     infoCard,
     slotsCard,
     el('div', { class: 'card' },
@@ -942,6 +944,91 @@ async function viewImport() {
       })
     }, '取り込む')),
     el('p', {}, el('a', { class: 'btn block', href: '#/players' }, 'キャンセル'))
+  ];
+}
+
+/* ====== 集金チェック ====== */
+async function viewCollect(id) {
+  const sb = state.sb;
+  const d = await loadGroupData(id);
+  const { ev, entries, slots, members } = d;
+  const num = (n) => Number(n).toLocaleString('ja-JP');
+  const lab = slotLabels(slots);
+  const orgPlay = ev.playfee_by_self === false;
+  const comp = ev.compe_fee || 0, play = ev.fee_per_person || 0, small = ev.small_group_fee || 0;
+  const slotIdx = new Map([...slots].sort(slotOrder).map((g, i) => [g.id, i]));
+  const joined = entries.filter((e) => e.attendance === 'join');
+  const sizeOf = new Map();
+  for (const g of slots) sizeOf.set(g.id, members.filter((m) => m.group_id === g.id && joined.some((e) => e.id === m.entry_id)).length);
+
+  const info = (e) => {
+    const m = members.find((x) => x.entry_id === e.id);
+    const g = m ? slots.find((x) => x.id === m.group_id) : null;
+    const two = !!g && sizeOf.get(g.id) === 2;
+    const parts = [];
+    if (comp) parts.push(['コンペ費', comp]);
+    if (orgPlay && play) parts.push(['プレー代', play]);
+    if (orgPlay && two && small) parts.push(['2名組追加', small]);
+    const due = parts.reduce((t, p) => t + p[1], 0);
+    return { g, m, two, parts, due, order: g ? slotIdx.get(g.id) : 999, pos: m ? m.position : 0 };
+  };
+  const rows = joined.map((e) => ({ e, ...info(e) })).sort((a, b) => a.order - b.order || a.pos - b.pos || String(a.e.last_kana || a.e.name).localeCompare(String(b.e.last_kana || b.e.name), 'ja'));
+  const isPaid = (r) => r.e.paid_amount != null;
+  let onlyUnpaid = false;
+  const root = el('div', {});
+
+  const setPaid = (r, amount) => guard(async () => {
+    const patch = amount == null ? { paid_amount: null, paid_at: null } : { paid_amount: amount, paid_at: new Date().toISOString() };
+    must(await sb.from('entries').update(patch).eq('id', r.e.id));
+    Object.assign(r.e, patch);
+    draw();
+  });
+  const unpaidText = () => {
+    const l = rows.filter((r) => !isPaid(r) && r.due > 0);
+    return [`【${ev.name} 集金・未回収】`, ...l.map((r) => `${r.g ? lab.get(r.g.id) : '未配置'} ${r.e.name}　${num(r.due)}円`)].join('\n');
+  };
+  function draw() {
+    const total = rows.reduce((t, r) => t + r.due, 0);
+    const got = rows.reduce((t, r) => t + (isPaid(r) ? r.e.paid_amount : 0), 0);
+    const left = rows.filter((r) => !isPaid(r) && r.due > 0);
+    const shown = onlyUnpaid ? rows.filter((r) => !isPaid(r)) : rows;
+    const cancelled = entries.filter((e) => e.attendance === 'cancelled');
+    root.replaceChildren(
+      el('div', { class: 'stats', style: 'grid-template-columns:repeat(3,1fr)' },
+        el('div', {}, el('b', {}, num(got) + '円'), el('span', {}, '回収済')),
+        el('div', {}, el('b', {}, num(Math.max(0, total - got)) + '円'), el('span', {}, `未回収（${left.length}人）`)),
+        el('div', {}, el('b', {}, num(total) + '円'), el('span', {}, `予定合計（${rows.length}人）`))),
+      !comp && !(orgPlay && play) ? el('div', { class: 'card muted' }, 'このコンペは、幹事が集めるお金が未設定です（コンペ費、またはプレーフィーを「幹事がまとめて集金」にすると集計されます）。') : null,
+      el('div', { class: 'row', style: 'margin:8px 0' },
+        el('button', { class: 'btn sm' + (onlyUnpaid ? ' pri' : ''), onclick: () => { onlyUnpaid = !onlyUnpaid; draw(); } }, onlyUnpaid ? '未回収だけ表示中' : '未回収だけ表示'),
+        el('button', { class: 'btn sm', onclick: () => copyText(unpaidText()) }, '未回収リストをコピー')),
+      ...shown.map((r) => el('div', { class: 'mem', style: 'cursor:default;gap:10px' + (isPaid(r) ? ';background:#eef3ef' : '') },
+        el('button', { class: 'btn' + (isPaid(r) ? ' pri' : ''), style: 'min-width:64px', onclick: () => setPaid(r, isPaid(r) ? null : r.due) }, isPaid(r) ? '済 ✓' : '受取'),
+        el('div', { class: 'grow' },
+          el('div', {}, el('small', {}, r.g ? lab.get(r.g.id) + ' ' + noZeroT(hhmm(r.g.start_time)) : '未配置'), ' ', el('strong', {}, r.e.name),
+            r.two && el('span', { class: 'badge warn', style: 'margin-left:6px' }, '2名組')),
+          el('small', {}, r.due ? `${num(r.due)}円（${r.parts.map((p) => p[0] + num(p[1])).join('＋')}）` : '集金なし')
+            , r.two && !orgPlay && small ? el('small', {}, `　※ゴルフ場で +${num(small)}円`) : null,
+          isPaid(r) && r.e.paid_amount !== r.due ? el('div', {}, el('small', {}, `受取 ${num(r.e.paid_amount)}円（予定と違います）`)) : null),
+        el('button', { class: 'btn sm', onclick: () => {
+          const v = prompt('受け取った金額（円）', String(isPaid(r) ? r.e.paid_amount : r.due));
+          if (v == null) return;
+          const n = parseInt(String(v).replace(/[,，円\s]/g, ''), 10);
+          if (!Number.isFinite(n) || n < 0) return toast('金額を数字で入力してください');
+          setPaid(r, n);
+        } }, '金額')),
+      ),
+      !shown.length ? el('div', { class: 'card muted' }, onlyUnpaid ? '未回収の人はいません 🎉' : '参加者がいません') : null,
+      cancelled.length ? el('div', { class: 'card' }, el('strong', {}, `当日キャンセル（${cancelled.length}人）`),
+        el('p', { class: 'muted' }, cancelled.map((e) => e.name).join('、')),
+        el('p', { class: 'muted' }, 'キャンセル料などがあれば、ここには含まれていません。')) : null);
+  }
+  draw();
+  return [
+    el('div', { class: 'row between' },
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '集金チェック'), el('div', { class: 'muted' }, ev.name)),
+      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    root
   ];
 }
 
