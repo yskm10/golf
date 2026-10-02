@@ -967,56 +967,101 @@ async function loadGroupData(id) {
   slots.sort(slotOrder);
   const ids = slots.map((g) => g.id);
   const members = ids.length ? must(await sb.from('group_members').select('*').in('group_id', ids)) : [];
+  let rules = [], rulesOk = true;
+  { const rr = await sb.from('group_rules').select('*').eq('event_id', id); if (rr.error) rulesOk = false; else rules = rr.data || []; }
   const pBy = new Map(players.map((p) => [p.id, p]));
   const eff = (e) => {
     const p = pBy.get(e.player_id) || {};
     return { aff: e.affiliation ?? p.affiliation ?? null, avg: e.avg_score ?? p.avg_score ?? null, tee: e.tee ?? p.tee ?? null };
   };
-  return { ev, entries, slots, members, eff };
+  return { ev, entries, slots, members, rules, rulesOk, eff };
 }
 
-// 平均スコアをそろえ、同じ所属が同じ組に偏らないよう振り分ける
-function autoAssign(people, g, wScore, wAff) {
+// 平均スコアをそろえ、同じ所属が同じ組に偏らないよう振り分ける。
+// rules: [{kind:'together'|'apart', a, b}]（entry id）
+function autoAssign(people, g, wScore, wAff, rules) {
+  rules = rules || [];
   const known = people.map((p) => p.avg).filter((v) => v != null).sort((a, b) => a - b);
   const med = known.length ? known[Math.floor(known.length / 2)] : 100;
-  const P = people.map((p) => ({ id: p.id, s: p.avg ?? med, a: p.aff ? noSpace(p.aff).toLowerCase() : null }));
-  const N = P.length, base = Math.floor(N / g), extra = N % g;
+  const P = new Map(people.map((p) => [p.id, { id: p.id, s: p.avg ?? med, a: p.aff ? noSpace(p.aff).toLowerCase() : null }]));
+  const N = P.size, base = Math.floor(N / g), extra = N % g;
   const caps = Array.from({ length: g }, (_, i) => base + (i < extra ? 1 : 0));
-  const mean = P.reduce((t, p) => t + p.s, 0) / N;
-  const G = Array.from({ length: g }, () => []);
-  const sum = (l) => l.reduce((t, p) => t + p.s, 0);
-  for (const p of [...P].sort((x, y) => y.s - x.s)) {
+  const maxCap = Math.max(...caps);
+  const mean = [...P.values()].reduce((t, p) => t + p.s, 0) / N;
+
+  // 「同じ組」は、つながった人どうしを1つのかたまりにする
+  const par = new Map([...P.keys()].map((k) => [k, k]));
+  const find = (x) => { while (par.get(x) !== x) { par.set(x, par.get(par.get(x))); x = par.get(x); } return x; };
+  for (const r of rules) if (r.kind === 'together' && P.has(r.a) && P.has(r.b)) par.set(find(r.a), find(r.b));
+  const clusters = new Map();
+  for (const k of P.keys()) { const r = find(k); if (!clusters.has(r)) clusters.set(r, []); clusters.get(r).push(P.get(k)); }
+  let units = [];
+  for (const m of clusters.values()) for (let i = 0; i < m.length; i += maxCap) units.push(m.slice(i, i + maxCap));
+  const usum = (u) => u.reduce((t, p) => t + p.s, 0);
+  units.sort((x, y) => y.length - x.length || usum(y) / y.length - usum(x) / x.length);
+
+  const apart = new Set();
+  for (const r of rules) if (r.kind === 'apart' && P.has(r.a) && P.has(r.b)) { apart.add(r.a + '|' + r.b); apart.add(r.b + '|' + r.a); }
+
+  const G = Array.from({ length: g }, () => ({ units: [], n: 0, sum: 0 }));
+  const put = (u) => {
     let best = -1, bv = Infinity;
     for (let i = 0; i < g; i++) {
-      if (G[i].length >= caps[i]) continue;
-      const v = sum(G[i]) / caps[i];
+      if (caps[i] - G[i].n < u.length) continue;
+      const v = (G[i].sum + usum(u)) / caps[i];
       if (v < bv) { bv = v; best = i; }
     }
-    G[best].push(p);
+    if (best < 0) return false;
+    G[best].units.push(u); G[best].n += u.length; G[best].sum += usum(u);
+    return true;
+  };
+  for (const u of units) {
+    if (put(u)) continue;
+    for (const p of u) put([p]); // 入りきらないときは、かたまりをほどく
   }
-  const gcost = (l) => {
+  const flat = (grp) => grp.units.flat();
+  const gcost = (grp) => {
+    const l = flat(grp);
     if (!l.length) return 0;
-    const avg = sum(l) / l.length;
+    const avg = usum(l) / l.length;
     let c = wScore * (avg - mean) * (avg - mean) * l.length;
     const cnt = new Map();
     for (const p of l) if (p.a) cnt.set(p.a, (cnt.get(p.a) || 0) + 1);
     for (const v of cnt.values()) c += wAff * 30 * v * (v - 1) / 2;
+    for (let x = 0; x < l.length; x++) for (let y = x + 1; y < l.length; y++) if (apart.has(l[x].id + '|' + l[y].id)) c += 2000;
     return c;
   };
   if (g > 1) {
-    const iters = 12000;
+    const iters = 16000;
     for (let it = 0; it < iters; it++) {
       const T = 20 * Math.pow(0.005, it / iters);
       const i = Math.floor(Math.random() * g);
       let j = Math.floor(Math.random() * (g - 1)); if (j >= i) j++;
-      const a = Math.floor(Math.random() * G[i].length), b = Math.floor(Math.random() * G[j].length);
+      if (!G[i].units.length || !G[j].units.length) continue;
+      const a = Math.floor(Math.random() * G[i].units.length);
+      const sz = G[i].units[a].length;
+      const cand = G[j].units.map((u, k) => (u.length === sz ? k : -1)).filter((k) => k >= 0);
+      if (!cand.length) continue;
+      const b = cand[Math.floor(Math.random() * cand.length)];
       const before = gcost(G[i]) + gcost(G[j]);
-      [G[i][a], G[j][b]] = [G[j][b], G[i][a]];
+      [G[i].units[a], G[j].units[b]] = [G[j].units[b], G[i].units[a]];
+      G[i].sum = usum(flat(G[i])); G[j].sum = usum(flat(G[j]));
       const delta = gcost(G[i]) + gcost(G[j]) - before;
-      if (delta > 0 && Math.random() >= Math.exp(-delta / T)) [G[i][a], G[j][b]] = [G[j][b], G[i][a]];
+      if (delta > 0 && Math.random() >= Math.exp(-delta / T)) {
+        [G[i].units[a], G[j].units[b]] = [G[j].units[b], G[i].units[a]];
+        G[i].sum = usum(flat(G[i])); G[j].sum = usum(flat(G[j]));
+      }
     }
   }
-  return G.map((l) => l.sort((x, y) => y.s - x.s).map((p) => p.id));
+  return G.map((grp) => flat(grp).sort((x, y) => y.s - x.s).map((p) => p.id));
+}
+
+// 今の配置でルールが守られているか： 'ok' | 'ng' | 'wait'(未配置あり)
+function ruleState(rule, members) {
+  const ga = members.find((m) => m.entry_id === rule.entry_a), gb = members.find((m) => m.entry_id === rule.entry_b);
+  if (!ga || !gb) return 'wait';
+  const same = ga.group_id === gb.group_id;
+  return (rule.kind === 'together') === same ? 'ok' : 'ng';
 }
 
 function groupsAnnouncement(d) {
@@ -1063,6 +1108,32 @@ async function viewGroups(id) {
     el('option', { value: 'strong' }, '強くそろえる'), el('option', { value: 'normal' }, 'ふつう'), el('option', { value: 'weak' }, '弱め'));
   let selected = null;
   const root = el('div', {});
+  const ruleKind = el('select', {}, el('option', { value: 'together' }, '同じ組にする'), el('option', { value: 'apart' }, '別の組にする'));
+  const ruleA = el('select', {}), ruleB = el('select', {});
+  const fillRuleSel = () => {
+    const opts = d.entries.filter((e) => e.attendance === 'join')
+      .sort((x, y) => String(x.last_kana || x.name).localeCompare(String(y.last_kana || y.name), 'ja'));
+    for (const sel of [ruleA, ruleB]) {
+      const cur = sel.value;
+      sel.replaceChildren(el('option', { value: '' }, '選んでください'), ...opts.map((e) => el('option', { value: e.id }, e.name)));
+      sel.value = cur;
+    }
+  };
+  const addRule = () => guard(async () => {
+    const a = ruleA.value, b = ruleB.value;
+    if (!a || !b) return toast('2人を選んでください');
+    if (a === b) return toast('同じ人は選べません');
+    if (d.rules.some((r) => r.kind === ruleKind.value && ((r.entry_a === a && r.entry_b === b) || (r.entry_a === b && r.entry_b === a)))) return toast('同じルールがすでにあります');
+    const row = must(await sb.from('group_rules').insert({ event_id: id, kind: ruleKind.value, entry_a: a, entry_b: b }).select().single());
+    d.rules.push(row);
+    ruleA.value = ''; ruleB.value = '';
+    draw();
+  });
+  const delRule = (r) => guard(async () => {
+    must(await sb.from('group_rules').delete().eq('id', r.id));
+    d.rules = d.rules.filter((x) => x.id !== r.id);
+    draw();
+  });
 
   const eBy = () => new Map(d.entries.map((e) => [e.id, e]));
   const memRow = (entryId) => d.members.find((m) => m.entry_id === entryId) || null;
@@ -1136,14 +1207,17 @@ async function viewGroups(id) {
     const hasOld = d.members.some((m) => !lockedIds.has(m.group_id));
     if (hasOld && !confirm('ロックしていない組を、作り直します。よろしいですか？')) return;
     const g = Math.min(targets.length, Math.max(1, Math.ceil(people.length / 4)));
-    const result = autoAssign(people, g, W.score[optScore.value], W.aff[optAff.value]);
+    const pid = new Set(people.map((p) => p.id));
+    const rl = d.rules.filter((r) => pid.has(r.entry_a) && pid.has(r.entry_b)).map((r) => ({ kind: r.kind, a: r.entry_a, b: r.entry_b }));
+    const result = autoAssign(people, g, W.score[optScore.value], W.aff[optAff.value], rl);
     const useIds = targets.map((t) => t.id);
     must(await sb.from('group_members').delete().in('group_id', useIds));
     const rows = [];
     result.forEach((ids, gi) => ids.forEach((eid, pi) => rows.push({ group_id: targets[gi].id, entry_id: eid, position: pi })));
     must(await sb.from('group_members').insert(rows));
-    toast(`${people.length}人を${g}組に振り分けました`);
     await done();
+    const ng = d.rules.filter((r) => ruleState(r, d.members) === 'ng').length;
+    toast(`${people.length}人を${g}組に振り分けました` + (ng ? `（守れなかったルールが${ng}件あります）` : ''));
   });
 
   function draw() {
@@ -1154,6 +1228,10 @@ async function viewGroups(id) {
     const selGroup = selected ? groupOf(selected) : null;
     const cap = d.slots.length * 4;
     const lab = slotLabels(d.slots);
+    const badRule = (g) => {
+      const inG = new Set(d.members.filter((m) => m.group_id === g.id).map((m) => m.entry_id));
+      return d.rules.some((r) => (inG.has(r.entry_a) || inG.has(r.entry_b)) && ruleState(r, d.members) === 'ng');
+    };
     const nodes = [];
 
     nodes.push(el('div', { class: 'stats', style: 'grid-template-columns:repeat(3,1fr)' },
@@ -1171,6 +1249,19 @@ async function viewGroups(id) {
       el('div', { class: 'row' },
         el('button', { class: 'btn sm', onclick: () => copyText(groupsAnnouncement(d)) }, 'LINE用の組表をコピー'),
         el('a', { class: 'btn sm', href: `#/event/${id}/print` }, '印刷用を開く'))));
+
+    fillRuleSel();
+    const nm = (eid) => { const e = emap.get(eid); return e ? e.name : '（不明）'; };
+    const stIcon = { ok: '✅', ng: '⚠️ 守れていません', wait: '未配置' };
+    nodes.push(el('div', { class: 'card' },
+      el('strong', {}, '同じ組・別の組のルール'),
+      !d.rulesOk ? el('p', { class: 'muted' }, 'ルール機能を使うには、データベースの準備（SQL）が必要です。') : [
+        el('p', { class: 'muted' }, '自動で組分けするときに守ります。ロックした組の人とのルールは自動では守れないので、手で入れ替えてください。'),
+        d.rules.map((r) => el('div', { class: 'row between', style: 'padding:6px 0;border-bottom:1px solid var(--bd)' },
+          el('div', {}, el('b', {}, `${nm(r.entry_a)} と ${nm(r.entry_b)}`), el('div', { class: 'muted' }, (r.kind === 'together' ? '同じ組' : '別の組') + '　' + stIcon[ruleState(r, d.members)])),
+          el('button', { class: 'btn sm', onclick: () => delRule(r) }, '削除'))),
+        el('div', { style: 'margin-top:8px' }, el('label', {}, '1人目'), ruleA, el('label', {}, '2人目'), ruleB, el('label', {}, 'ルール'), ruleKind),
+        el('p', {}, el('button', { class: 'btn block', onclick: addRule }, 'ルールを追加'))]));
 
     if (selected) {
       const e = emap.get(selected);
@@ -1197,6 +1288,7 @@ async function viewGroups(id) {
         el('div', { class: 'row between' },
           el('div', {}, el('strong', {}, `${lab.get(g.id)}　${noZeroT(hhmm(g.start_time))}`), ' ',
             active.length === 2 && el('span', { class: 'badge warn' }, '2名組'), ' ',
+            badRule(g) && el('span', { class: 'badge warn' }, '⚠ ルール'), ' ',
             el('span', { class: 'muted' }, (avg ? `平均${avg}` : '') + (unknown ? `（不明${unknown}人）` : ''))),
           el('button', { class: 'btn sm', onclick: () => toggleLock(g) }, g.locked ? '🔒 ロック中' : 'ロックする')),
         ms.length ? ms.map(chip) : el('div', { class: 'muted' }, '空き'),
