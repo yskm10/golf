@@ -102,13 +102,20 @@ const toHira = (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charC
 const norm = (s) => toHira(String(s || '').toLowerCase()).replace(/[\s\u3000]+/g, '');
 const noSpace = (s) => String(s || '').replace(/[\s\u3000]+/g, '');
 const joinName = (l, f) => (noSpace(l) + ' ' + noSpace(f)).trim();
-function nameInputs(last, first) {
-  const l = el('input', { value: last || '', placeholder: '山田', autocomplete: 'off' });
-  const f = el('input', { value: first || '', placeholder: '太郎', autocomplete: 'off' });
-  const node = el('div', { class: 'row', style: 'flex-wrap:nowrap' },
-    el('div', { class: 'grow' }, el('label', {}, '姓'), l),
-    el('div', { class: 'grow' }, el('label', {}, '名'), f));
-  return { l, f, node };
+const kanaVal = (s) => toHira(noSpace(s));
+const scoreOrNull = (v) => { const n = numOrNull(v); return n != null && n > 0 ? n : null; };
+function nameInputs(last, first, lk, fk) {
+  const mk = (v, ph) => el('input', { value: v || '', placeholder: ph, autocomplete: 'off' });
+  const l = mk(last, '山田'); const f = mk(first, '太郎');
+  const lkI = mk(lk, 'やまだ'); const fkI = mk(fk, 'たろう');
+  const node = el('div', {},
+    el('div', { class: 'row', style: 'flex-wrap:nowrap' },
+      el('div', { class: 'grow' }, el('label', {}, '姓'), l),
+      el('div', { class: 'grow' }, el('label', {}, '名'), f)),
+    el('div', { class: 'row', style: 'flex-wrap:nowrap' },
+      el('div', { class: 'grow' }, el('label', {}, '姓のよみ（ひらがな）'), lkI),
+      el('div', { class: 'grow' }, el('label', {}, '名のよみ（ひらがな）'), fkI)));
+  return { l, f, lk: lkI, fk: fkI, node };
 }
 const numOrNull = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; };
 const strOrNull = (v) => { const s = String(v || '').trim(); return s ? s : null; };
@@ -174,7 +181,9 @@ function errMsg(e) {
     form_closed: '出欠の受付は終了しています',
     form_not_found: 'URLが正しくありません',
     name_required: 'お名前を入力してください',
-    invalid_score: '平均スコアは50〜200の数字で入力してください',
+    invalid_score: '平均スコアは50〜200で入力してください（初めての方は0）',
+    score_required: '平均スコアを入力してください（初めての方は0）',
+    kana_required: '姓のよみ・名のよみを入力してください',
     player_not_found: '名簿の選択をやり直してください'
   };
   for (const k of Object.keys(map)) if (m.includes(k)) return map[k];
@@ -423,7 +432,7 @@ async function viewEvent(id) {
   });
   const addEntry = (p, attendance) => guard(async () => {
     must(await sb.from('entries').insert({
-      event_id: id, player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, attendance, approval: 'approved', source: 'admin'
+      event_id: id, player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana, attendance, approval: 'approved', source: 'admin'
     }));
     refresh();
   });
@@ -444,6 +453,7 @@ async function viewEvent(id) {
   const pendingCard = (e) => el('div', { class: 'card pend' },
     el('strong', {}, e.name), ' ', el('span', { class: 'badge' }, '名簿にない人'),
     el('div', { class: 'muted' }, [
+      (e.last_kana || e.first_kana) ? 'よみ：' + (e.last_kana || '') + (e.first_kana || '') : null,
       e.affiliation, e.avg_score != null ? `平均${e.avg_score}` : null,
       e.tee ? 'ティー' + TEE[e.tee][0] : null,
       '回答：' + (e.attendance === 'join' ? '参加' : '欠席'),
@@ -472,7 +482,7 @@ async function viewEvent(id) {
       el('button', { class: 'btn sm', onclick: () => addEntry(p, 'absent') }, '欠席')))) : null;
 
   // 名簿にない人を幹事が追加
-  const nm2 = nameInputs('', '');
+  const nm2 = nameInputs('', '', '', '');
   const nAff = el('input', { placeholder: '所属（任意）' });
   const nAvg = el('input', { type: 'number', inputmode: 'numeric', placeholder: '平均スコア（任意）' });
   const nTee = teeSelect('');
@@ -488,11 +498,12 @@ async function viewEvent(id) {
           if (!noSpace(nm2.l.value) || !noSpace(nm2.f.value)) return toast('姓と名を入力してください');
           const p = must(await sb.from('players').insert({
             team_id: state.team.id, last_name: noSpace(nm2.l.value), first_name: noSpace(nm2.f.value),
-            name: joinName(nm2.l.value, nm2.f.value), affiliation: strOrNull(nAff.value),
-            avg_score: numOrNull(nAvg.value), tee: nTee.value || null
+            name: joinName(nm2.l.value, nm2.f.value), last_kana: kanaVal(nm2.lk.value) || null, first_kana: kanaVal(nm2.fk.value),
+            affiliation: strOrNull(nAff.value),
+            avg_score: scoreOrNull(nAvg.value), tee: nTee.value || null
           }).select().single());
           must(await sb.from('entries').insert({
-            event_id: id, player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, attendance: 'join', approval: 'approved', source: 'admin'
+            event_id: id, player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana, attendance: 'join', approval: 'approved', source: 'admin'
           }));
           toast('名簿と出欠に追加しました');
           refresh();
@@ -580,9 +591,8 @@ async function viewPlayers() {
 async function viewPlayerForm(id) {
   const p = id
     ? must(await state.sb.from('players').select('*').eq('id', id).single())
-    : { name: '', last_name: '', first_name: '', kana: '', avg_score: '', affiliation: '', tee: '', note: '' };
-  const nm = nameInputs(p.last_name, p.first_name);
-  const kana = el('input', { value: p.kana || '', placeholder: 'やまだたろう（検索・並び順用）' });
+    : { name: '', last_name: '', first_name: '', last_kana: '', first_kana: '', avg_score: '', affiliation: '', tee: '', note: '' };
+  const nm = nameInputs(p.last_name, p.first_name, p.last_kana, p.first_kana);
   const avg = el('input', { type: 'number', inputmode: 'numeric', value: p.avg_score ?? '', placeholder: '例：98' });
   const aff = el('input', { value: p.affiliation || '', placeholder: '会社名など' });
   const tee = teeSelect(p.tee);
@@ -591,8 +601,7 @@ async function viewPlayerForm(id) {
     el('h2', {}, id ? '名簿を編集' : '名簿に追加'),
     el('div', { class: 'card' },
       nm.node,
-      el('label', {}, 'ふりがな（スペースなし）'), kana,
-      el('label', {}, '平均スコア'), avg,
+      el('label', {}, '平均スコア（不明なら空欄）'), avg,
       el('label', {}, '所属'), aff,
       el('label', {}, 'ティー'), tee,
       el('label', {}, 'メモ'), note),
@@ -602,7 +611,8 @@ async function viewPlayerForm(id) {
         const payload = {
           last_name: noSpace(nm.l.value), first_name: noSpace(nm.f.value),
           name: joinName(nm.l.value, nm.f.value),
-          kana: strOrNull(noSpace(kana.value)), avg_score: numOrNull(avg.value),
+          last_kana: kanaVal(nm.lk.value) || null, first_kana: kanaVal(nm.fk.value),
+          avg_score: scoreOrNull(avg.value),
           affiliation: strOrNull(aff.value), tee: tee.value || null, note: strOrNull(note.value)
         };
         if (id) must(await state.sb.from('players').update(payload).eq('id', id));
@@ -624,11 +634,11 @@ async function viewPlayerForm(id) {
 async function viewImport() {
   const ta = el('textarea', {
     style: 'min-height:200px',
-    placeholder: '1行に1人。カンマまたはタブ区切り\n姓,名,ふりがな,平均スコア,所属,ティー\n山田,太郎,やまだたろう,98,A商事,青\n佐藤,花子,さとうはなこ,105,B工業,赤'
+    placeholder: '1行に1人。カンマまたはタブ区切り\n姓,名,姓のよみ,名のよみ,平均スコア,所属,ティー\n山田,太郎,やまだ,たろう,98,A商事,青\n佐藤,花子,さとう,はなこ,105,B工業,赤'
   });
   return [
     el('h2', {}, '名簿をまとめて追加'),
-    el('p', { class: 'muted' }, 'Excelからコピーして貼り付けてもOK。姓と名は必須、ふりがな・平均スコア・所属・ティーは省略できます（順番はそのまま）。すでに名簿にある同じ姓名の人は飛ばします。'),
+    el('p', { class: 'muted' }, 'Excelからコピーして貼り付けてもOK。姓と名は必須、よみ・平均スコア・所属・ティーは省略できます（順番はそのまま。平均スコアが不明なら空欄か0）。すでに名簿にある同じ姓名の人は飛ばします。'),
     ta,
     el('p', {}, el('button', {
       class: 'btn pri block', onclick: () => guard(async () => {
@@ -645,12 +655,12 @@ async function viewImport() {
           const key = (noSpace(cols[0]) + noSpace(cols[1])).toLowerCase();
           if (seen.has(key)) { skipped++; continue; }
           seen.add(key);
-          const score = numOrNull(cols[3]);
+          const score = numOrNull(cols[4]);
           rows.push({
             team_id: state.team.id, last_name: noSpace(cols[0]), first_name: noSpace(cols[1]),
-            name: joinName(cols[0], cols[1]), kana: strOrNull(noSpace(cols[2])),
+            name: joinName(cols[0], cols[1]), last_kana: kanaVal(cols[2]) || null, first_kana: kanaVal(cols[3]),
             avg_score: score != null && score >= 50 && score <= 200 ? score : null,
-            affiliation: strOrNull(cols[4]), tee: teeFromText(cols[5])
+            affiliation: strOrNull(cols[5]), tee: teeFromText(cols[6])
           });
         }
         if (!rows.length) return toast(bad ? '姓と名の両方が必要です（名が空の行があります）' : (skipped ? '新しく追加する人がいません' : '取り込む行がありません'));
@@ -719,13 +729,14 @@ async function renderForm(token) {
 
   const filter = el('input', { type: 'search', placeholder: '名前の一部で絞り込み（例：やまだ）' });
   const sel = el('select', {});
-  const newNm = nameInputs('', '');
+  const newNm = nameInputs('', '', '', '');
   const newBox = el('div', { hidden: true }, newNm.node);
   const hint = el('div', { class: 'muted' });
   const partyBox = el('div', { hidden: true });
   const attWrap = el('div', {});
   const partyWrap = el('div', {});
   const avg = el('input', { type: 'number', inputmode: 'numeric', placeholder: '例：98' });
+  const avgBox = el('div', { hidden: true }, el('label', {}, '平均スコア（必須・初めての方は 0 と入力）'), avg);
   const note = el('textarea', { placeholder: '例：○○さんと同じ組を希望 / 早上がり希望 など（自動では反映されず、幹事が確認します）' });
   const submit = el('button', { class: 'btn pri block', type: 'button' }, '回答する');
 
@@ -743,7 +754,7 @@ async function renderForm(token) {
   function onSel() {
     const v = sel.value;
     newBox.hidden = v !== '__new';
-    hint.textContent = v === '__new' ? '初めての方は、幹事さんの確認後に名簿へ追加されます。平均スコアも入力してください。' : '';
+    hint.textContent = v === '__new' ? '初めての方は、幹事さんの確認後に名簿へ追加されます。平均スコアは「0」と入力してください。' : '';
   }
   function drawAtt() {
     attWrap.replaceChildren(seg([['join', '参加します'], ['absent', '欠席します']], S.attendance, (v) => {
@@ -752,6 +763,7 @@ async function renderForm(token) {
       drawAtt();
     }, true));
     partyBox.hidden = !(ev.has_party && S.attendance === 'join');
+    avgBox.hidden = S.attendance !== 'join';
     partyWrap.replaceChildren(seg([['join', '参加します'], ['absent', '参加しません']], S.party, (v) => {
       S.party = v;
       drawAtt();
@@ -765,8 +777,14 @@ async function renderForm(token) {
     const v = sel.value;
     if (!v) return toast('お名前を選んでください');
     if (v === '__new' && (!noSpace(newNm.l.value) || !noSpace(newNm.f.value))) return toast('姓と名を入力してください');
+    if (v === '__new' && (!kanaVal(newNm.lk.value) || !kanaVal(newNm.fk.value))) return toast('姓のよみ・名のよみを入力してください');
     if (!S.attendance) return toast('参加／欠席を選んでください');
     if (ev.has_party && S.attendance === 'join' && !S.party) return toast('表彰式・打上げの参加可否を選んでください');
+    if (S.attendance === 'join') {
+      const sc = numOrNull(avg.value);
+      if (sc == null) return toast('平均スコアを入力してください（初めての方は 0）');
+      if (sc !== 0 && (sc < 50 || sc > 200)) return toast('平均スコアは50〜200で入力してください（初めての方は 0）');
+    }
     submit.disabled = true;
     try {
       const isNew = v === '__new';
@@ -775,9 +793,11 @@ async function renderForm(token) {
         p_player_id: isNew ? null : v,
         p_last_name: isNew ? noSpace(newNm.l.value) : null,
         p_first_name: isNew ? noSpace(newNm.f.value) : null,
+        p_last_kana: isNew ? kanaVal(newNm.lk.value) : null,
+        p_first_kana: isNew ? kanaVal(newNm.fk.value) : null,
         p_attendance: S.attendance,
         p_party: ev.has_party && S.attendance === 'join' ? S.party : null,
-        p_avg_score: numOrNull(avg.value),
+        p_avg_score: S.attendance === 'join' ? numOrNull(avg.value) : null,
         p_note: strOrNull(note.value)
       }));
       if (!isNew) ls.set(lastKey, v);
@@ -808,7 +828,7 @@ async function renderForm(token) {
         newBox, hint,
         el('label', {}, '参加しますか？'), attWrap,
         partyBox,
-        el('label', {}, '平均スコア（任意・変わったときだけ）'), avg,
+        avgBox,
         el('label', {}, '備考（任意）'), note),
       submit)));
   fillSel();
