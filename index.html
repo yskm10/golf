@@ -354,6 +354,8 @@ async function routeAdmin() {
   else if (a === 'event' && c === 'print') view = () => viewPrint(b);
   else if (a === 'event' && c === 'special') view = () => viewSpecial(b);
   else if (a === 'event' && c === 'collect') view = () => viewCollect(b);
+  else if (a === 'event' && c === 'results') view = () => viewResults(b);
+  else if (a === 'event' && c === 'awards') view = () => viewAwards(b);
   else if (a === 'event' && b) view = () => viewEvent(b);
   else if (a === 'players' && b === 'import') { active = 'players'; view = viewImport; }
   else if (a === 'players') { active = 'players'; view = viewPlayers; }
@@ -805,6 +807,8 @@ async function viewEvent(id) {
     el('a', { class: 'btn pri block', style: 'margin-top:10px', href: `#/event/${id}/groups` }, `👥 組分けする（参加${joined.length}人・枠${slots.length}組）`),
     el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/special` }, '🎯 ニアピン・ドラコン'),
     el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/collect` }, '💴 集金チェック'),
+    el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/results` }, '📊 成績・順位'),
+    el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/awards` }, '🎁 賞・商品'),
     infoCard,
     slotsCard,
     el('div', { class: 'card' },
@@ -945,6 +949,234 @@ async function viewImport() {
       })
     }, '取り込む')),
     el('p', {}, el('a', { class: 'btn block', href: '#/players' }, 'キャンセル'))
+  ];
+}
+
+/* ====== 成績・順位 ====== */
+async function viewResults(id) {
+  const sb = state.sb;
+  const [evR, enR] = await Promise.all([
+    sb.from('events').select('id,name,event_date,course_name').eq('id', id).single(),
+    sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved')
+  ]);
+  const ev = must(evR);
+  const people = must(enR).filter((e) => e.attendance === 'join');
+  const root = el('div', {});
+  let preview = null;
+  const order = () => [...people].sort((a, b) => (a.result_rank ?? 999) - (b.result_rank ?? 999)
+    || (a.net ?? 999) - (b.net ?? 999) || String(a.last_kana || a.name).localeCompare(String(b.last_kana || b.name), 'ja'));
+  const save = (e, patch) => guard(async () => { must(await sb.from('entries').update(patch).eq('id', e.id)); Object.assign(e, patch); });
+  const msg = el('div', { class: 'muted' });
+  const fileIn = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+  const readBtn = el('button', { class: 'btn pri block', onclick: () => fileIn.click() }, '📷 順位表の写真を読み込む');
+  const match = (row) => {
+    const k = norm(row.name || '');
+    if (!k) return null;
+    const hit = people.find((e) => norm(e.name) === k) || people.find((e) => norm((e.last_kana || '') + (e.first_kana || '')) === k);
+    return hit ? hit.id : null;
+  };
+  fileIn.addEventListener('change', () => guard(async () => {
+    const files = [...fileIn.files].slice(0, 8);
+    if (!files.length) return;
+    readBtn.disabled = true; msg.textContent = '読み取り中…（20〜40秒ほどかかります）';
+    try {
+      const images = await Promise.all(files.map((f) => fileToJpeg(f)));
+      const r = await fetch(`${SB_URL}/functions/v1/read-results`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
+        body: JSON.stringify({ images })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
+      preview = (j.data.rows || []).map((row) => ({ row, entryId: match(row) || '' }));
+      msg.textContent = `${preview.length}人分を読み取りました。名前の対応を確認して「反映する」を押してください。`;
+      draw();
+    } catch (e) { msg.textContent = ''; throw e; } finally { readBtn.disabled = false; fileIn.value = ''; }
+  }));
+  const applyPreview = () => guard(async () => {
+    const ok = preview.filter((p) => p.entryId);
+    await Promise.all(ok.map(async (p) => {
+      const e = people.find((x) => x.id === p.entryId);
+      const patch = { gross: p.row.gross ?? null, net: p.row.net ?? null, result_rank: p.row.rank ?? null };
+      must(await sb.from('entries').update(patch).eq('id', e.id)); Object.assign(e, patch);
+    }));
+    toast(`${ok.length}人の成績を反映しました`);
+    preview = null; msg.textContent = ''; draw();
+  });
+  const autoRank = () => guard(async () => {
+    const l = people.filter((e) => e.net != null).sort((a, b) => a.net - b.net);
+    await Promise.all(l.map(async (e, i) => {
+      const r = i > 0 && l[i - 1].net === e.net ? l[i - 1]._r : i + 1;
+      e._r = r;
+      must(await sb.from('entries').update({ result_rank: r }).eq('id', e.id)); e.result_rank = r;
+    }));
+    toast('ネットの小さい順に、順位を付けました（同スコアは同順位）'); draw();
+  });
+  const numField = (label, e, key, step) => {
+    const inp = el('input', { type: 'number', inputmode: 'decimal', step: step || '1', value: e[key] ?? '', style: 'width:100%' });
+    inp.addEventListener('change', () => { const v = inp.value === '' ? null : Number(inp.value); save(e, { [key]: Number.isFinite(v) ? v : null }); });
+    return el('div', {}, el('small', { class: 'muted' }, label), inp);
+  };
+  function draw() {
+    const nodes = [];
+    if (preview) {
+      nodes.push(el('div', { class: 'card' }, el('strong', {}, '読み取り結果（反映前）'),
+        ...preview.map((p) => {
+          const sel = el('select', {}, el('option', { value: '' }, '（反映しない）'),
+            ...people.map((e) => el('option', { value: e.id }, e.name)));
+          sel.value = p.entryId; sel.addEventListener('change', () => { p.entryId = sel.value; });
+          return el('div', { style: 'padding:8px 0;border-bottom:1px solid var(--bd)' },
+            el('div', {}, el('b', {}, p.row.name), el('span', { class: 'muted' }, `　順位${p.row.rank ?? '-'}　グロス${p.row.gross ?? '-'}　ネット${p.row.net ?? '-'}`)), sel);
+        }),
+        el('div', { class: 'row', style: 'margin-top:8px' },
+          el('button', { class: 'btn pri', onclick: applyPreview }, '反映する'),
+          el('button', { class: 'btn', onclick: () => { preview = null; msg.textContent = ''; draw(); } }, 'やめる'))));
+    }
+    for (const e of order()) {
+      const sex = el('select', {}, el('option', { value: '' }, '-'), el('option', { value: 'M' }, '男'), el('option', { value: 'F' }, '女'));
+      sex.value = e.sex || ''; sex.addEventListener('change', () => save(e, { sex: sex.value || null }));
+      nodes.push(el('div', { class: 'card', style: 'padding:10px' },
+        el('strong', {}, e.name),
+        el('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px' },
+          numField('順位', e, 'result_rank'), numField('グロス', e, 'gross'), numField('ネット', e, 'net', '0.1'),
+          el('div', {}, el('small', { class: 'muted' }, '性別'), sex))));
+    }
+    if (!people.length) nodes.push(el('div', { class: 'card muted' }, '参加者がいません'));
+    root.replaceChildren(...nodes);
+  }
+  draw();
+  return [
+    el('div', { class: 'row between' },
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '成績・順位'), el('div', { class: 'muted' }, ev.name)),
+      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    el('div', { class: 'card' }, readBtn, msg, fileIn,
+      el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。'),
+      el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す'))),
+    root
+  ];
+}
+
+/* ====== 賞・商品 ====== */
+async function viewAwards(id) {
+  const sb = state.sb;
+  const [evR, enR, spR, awR] = await Promise.all([
+    sb.from('events').select('id,name').eq('id', id).single(),
+    sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved'),
+    sb.from('special_records').select('*').eq('event_id', id),
+    sb.from('awards').select('*').eq('event_id', id)
+  ]);
+  const ev = must(evR), people = must(enR).filter((e) => e.attendance === 'join'), specials = must(spR);
+  if (awR.error) return [el('div', { class: 'row between' }, el('h2', {}, '賞・商品'), el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    el('div', { class: 'card' }, 'この機能を使うには、データベースの準備（SQL）が必要です。')];
+  let awards = awR.data || [];
+  const KIND = { nearpin: 'ニアピン', drive: 'ドラコン' };
+  const spTitle = (r) => `${r.course ? r.course + ' ' : ''}${KIND[r.kind]} ${r.hole_no ? r.hole_no + '番' : '未定'}`;
+  const nameOf = (eid) => { const e = people.find((x) => x.id === eid); return e ? e.name : ''; };
+  const sexTxt = { M: '男性', F: '女性' };
+  const ruleTxt = (a) => ({ net_rank: `ネット${a.rank_no || 1}位`, gross_rank: `グロス${a.rank_no || 1}位` + (a.sex ? `（${sexTxt[a.sex]}）` : ''),
+    booby: `ネット下から${a.rank_no || 2}番目`, special: (() => { const r = specials.find((x) => x.id === a.special_id); return r ? spTitle(r) : 'ニアピン・ドラコン（未選択）'; })(), manual: '手で決める' })[a.rule];
+  const root = el('div', {});
+  const sorted = () => [...awards].sort((a, b) => a.sort - b.sort || String(a.created_at).localeCompare(String(b.created_at)));
+
+  // 自動計算
+  const netRank = () => {
+    const m = new Map(); const l = people.filter((e) => e.net != null).sort((a, b) => a.net - b.net);
+    l.forEach((e, i) => m.set(e.id, e.result_rank ?? (i > 0 && l[i - 1].net === e.net ? m.get(l[i - 1].id) : i + 1)));
+    return m;
+  };
+  const candidates = (a) => {
+    if (a.rule === 'net_rank') { const m = netRank(); return people.filter((e) => m.get(e.id) === (a.rank_no || 1)).map((e) => e.id); }
+    if (a.rule === 'gross_rank') {
+      const l = people.filter((e) => e.gross != null && (!a.sex || e.sex === a.sex));
+      return l.filter((e) => 1 + l.filter((x) => x.gross < e.gross).length === (a.rank_no || 1)).map((e) => e.id);
+    }
+    if (a.rule === 'booby') {
+      const l = people.filter((e) => e.net != null).sort((x, y) => y.net - x.net);
+      const t = l[(a.rank_no || 2) - 1]; return t ? l.filter((e) => e.net === t.net).map((e) => e.id) : [];
+    }
+    if (a.rule === 'special') { const r = specials.find((x) => x.id === a.special_id); return r && r.winner_entry_id ? [r.winner_entry_id] : []; }
+    return [];
+  };
+  const save = (a, patch) => guard(async () => { must(await sb.from('awards').update(patch).eq('id', a.id)); Object.assign(a, patch); });
+  const autoFill = () => guard(async () => {
+    let n = 0, multi = 0;
+    for (const a of sorted()) {
+      if (a.rule === 'manual') continue;
+      const c = candidates(a);
+      if (c.length === 1 && a.winner_entry_id !== c[0]) { must(await sb.from('awards').update({ winner_entry_id: c[0] }).eq('id', a.id)); a.winner_entry_id = c[0]; n++; }
+      else if (c.length > 1) multi++;
+    }
+    toast(`${n}件の受賞者を入れました` + (multi ? `（同スコアで決まらない賞が${multi}件あります）` : ''));
+    draw();
+  });
+  const addAwards = (rows) => guard(async () => {
+    const base = Math.max(0, ...awards.map((a) => a.sort)) + 1;
+    const made = must(await sb.from('awards').insert(rows.map((r, i) => ({ event_id: id, sort: base + i, ...r }))).select());
+    awards.push(...made); draw();
+  });
+  const preset = () => addAwards([
+    { name: '優勝', rule: 'net_rank', rank_no: 1 }, { name: '準優勝', rule: 'net_rank', rank_no: 2 }, { name: '第3位', rule: 'net_rank', rank_no: 3 },
+    { name: 'ベストグロス', rule: 'gross_rank', rank_no: 1 }, { name: 'ブービー賞', rule: 'booby', rank_no: 2 },
+    ...specials.map((r) => ({ name: spTitle(r), rule: 'special', special_id: r.id }))]);
+  const copyResult = () => {
+    const lines = [`【${ev.name} 表彰】`];
+    for (const a of sorted()) {
+      const w = a.winner_entry_id ? nameOf(a.winner_entry_id) : '';
+      lines.push(`${a.name}：${w ? w + 'さん' : '（未定）'}` + (a.prize ? `　${a.prize}` : ''));
+    }
+    copyText(lines.join('\n'));
+  };
+
+  const form = { name: el('input', { placeholder: '例：ベスグロ（女性）' }), rule: el('select', {},
+    el('option', { value: 'net_rank' }, 'ネットの順位'), el('option', { value: 'gross_rank' }, 'グロスの順位'),
+    el('option', { value: 'booby' }, 'ネットの下から数える（ブービー）'), el('option', { value: 'special' }, 'ニアピン・ドラコン'), el('option', { value: 'manual' }, '手で決める（飛び賞など）')),
+    rank: el('input', { type: 'number', inputmode: 'numeric', placeholder: '何位（ブービーは下から何番目）' }),
+    sex: el('select', {}, el('option', { value: '' }, '男女の区別なし'), el('option', { value: 'M' }, '男性だけ'), el('option', { value: 'F' }, '女性だけ')),
+    sp: el('select', {}, el('option', { value: '' }, '選んでください'), ...specials.map((r) => el('option', { value: r.id }, spTitle(r)))) };
+
+  function draw() {
+    const cnt = new Map(); for (const a of awards) if (a.winner_entry_id) cnt.set(a.winner_entry_id, (cnt.get(a.winner_entry_id) || 0) + 1);
+    const cards = sorted().map((a) => {
+      const c = candidates(a);
+      const sel = el('select', {}, el('option', { value: '' }, '未定'), ...people.map((e) => el('option', { value: e.id }, (c.includes(e.id) ? '★ ' : '') + e.name)));
+      sel.value = a.winner_entry_id || '';
+      sel.addEventListener('change', () => save(a, { winner_entry_id: sel.value || null }).then(draw));
+      const prize = el('input', { value: a.prize || '', placeholder: '商品（例：松阪牛すき焼きセット）' });
+      prize.addEventListener('change', () => save(a, { prize: strOrNull(prize.value) }));
+      const dup = a.winner_entry_id && cnt.get(a.winner_entry_id) > 1;
+      return el('div', { class: 'card' },
+        el('div', { class: 'row between' }, el('strong', {}, a.name),
+          el('button', { class: 'btn sm', onclick: () => guard(async () => {
+            if (!confirm(`「${a.name}」を削除しますか？`)) return;
+            must(await sb.from('awards').delete().eq('id', a.id)); awards = awards.filter((x) => x.id !== a.id); draw();
+          }) }, '削除')),
+        el('div', { class: 'muted' }, ruleTxt(a)),
+        el('label', {}, '商品'), prize,
+        el('label', {}, '受賞者'), sel,
+        a.rule !== 'manual' && c.length > 1 ? el('div', { class: 'note' }, `同スコアで決まりません。候補（★）：${c.map(nameOf).join('、')}`) : null,
+        a.rule !== 'manual' && c.length === 0 && !a.winner_entry_id ? el('div', { class: 'muted' }, '対象の成績がまだありません') : null,
+        dup ? el('div', { class: 'note' }, `⚠ ${nameOf(a.winner_entry_id)}さんは${cnt.get(a.winner_entry_id)}つの賞に入っています`) : null);
+    });
+    root.replaceChildren(
+      !awards.length ? el('div', { class: 'card' }, el('p', {}, 'まだ賞がありません。ひな形から始めると楽です。'), el('button', { class: 'btn pri block', onclick: preset }, '優勝・準優勝・3位・ベスグロ・ブービー・ニアピン/ドラコンを入れる')) : null,
+      ...cards,
+      el('div', { class: 'card' }, el('strong', {}, '賞を追加'),
+        el('label', {}, '賞の名前'), form.name, el('label', {}, '決め方'), form.rule,
+        el('label', {}, '何位（任意）'), form.rank, el('label', {}, '男女'), form.sex, el('label', {}, 'ニアピン・ドラコン（その賞のとき）'), form.sp,
+        el('p', {}, el('button', { class: 'btn block', onclick: () => {
+          const name = form.name.value.trim(); if (!name) return toast('賞の名前を入れてください');
+          if (form.rule.value === 'special' && !form.sp.value) return toast('ニアピン・ドラコンを選んでください');
+          addAwards([{ name, rule: form.rule.value, rank_no: numOrNull(form.rank.value), sex: form.sex.value || null, special_id: form.rule.value === 'special' ? form.sp.value : null }]);
+          form.name.value = ''; form.rank.value = '';
+        } }, '追加'))),
+      awards.length ? el('div', { class: 'row' }, el('button', { class: 'btn pri grow', onclick: autoFill }, '受賞者を自動で入れる'), el('button', { class: 'btn grow', onclick: copyResult }, 'LINE用の表彰結果をコピー')) : null);
+  }
+  draw();
+  return [
+    el('div', { class: 'row between' },
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '賞・商品'), el('div', { class: 'muted' }, ev.name)),
+      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    el('div', { class: 'muted', style: 'margin:6px 0' }, '成績は「成績・順位」で入れます。ニアピン・ドラコンの受賞者は、その画面の入力が反映されます。'),
+    root
   ];
 }
 
