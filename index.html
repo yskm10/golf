@@ -334,13 +334,17 @@ async function viewEvents() {
 async function viewEventForm(id) {
   const ev = id
     ? must(await state.sb.from('events').select('*').eq('id', id).single())
-    : { name: '', event_date: '', course_name: '', group_count_hint: '', start_time: '', start_interval_min: 8, has_party: false, form_deadline: null };
+    : { name: '', event_date: '', course_name: '', group_count_hint: '', has_party: false, form_deadline: null, plan_name: '', fee_per_person: '', small_group_fee: '', cancel_policy: '', notes_admin: '', notes_line: '' };
   const name = el('input', { value: ev.name, placeholder: '例：第12回 秋季コンペ' });
   const date = el('input', { type: 'date', value: ev.event_date || '' });
   const course = el('input', { value: ev.course_name || '', placeholder: 'ゴルフ場名' });
   const groups = el('input', { type: 'number', inputmode: 'numeric', value: ev.group_count_hint ?? '', placeholder: '空欄でOK' });
-  const start = el('input', { type: 'time', value: hhmm(ev.start_time) });
-  const interval = el('input', { type: 'number', inputmode: 'numeric', value: ev.start_interval_min ?? 8 });
+  const plan = el('input', { value: ev.plan_name || '', placeholder: '例：超[早期予約]土日祝特別営業日セルフ 昼バイキング付' });
+  const fee = el('input', { type: 'number', inputmode: 'numeric', value: ev.fee_per_person ?? '', placeholder: '例：10750' });
+  const smallFee = el('input', { type: 'number', inputmode: 'numeric', value: ev.small_group_fee ?? '', placeholder: '例：3300（1組2名のとき1人あたりの追加）' });
+  const cancel = el('textarea', { value: ev.cancel_policy || '', placeholder: '例：土日祝は1週間前から1人5,000円、平日は3日前から1人3,000円' });
+  const notesAdmin = el('textarea', { value: ev.notes_admin || '', placeholder: '幹事だけが見るメモ（ゴルフ場の注意事項、クーポンURLなど）' });
+  const notesLine = el('textarea', { value: ev.notes_line || '', placeholder: '出欠のLINE案内文に入れる注意事項（例：支払いはクレジットのみ／セルフバッグ持込禁止）' });
   const party = el('input', { type: 'checkbox', checked: ev.has_party });
   const deadline = el('input', { type: 'datetime-local', value: toLocalInput(ev.form_deadline) });
   return [
@@ -350,12 +354,15 @@ async function viewEventForm(id) {
       el('label', {}, '開催日'), date,
       el('label', {}, 'ゴルフ場'), course,
       el('label', {}, '組数の目安'), groups,
-      el('div', { class: 'row' },
-        el('div', { class: 'grow' }, el('label', {}, '最初のスタート時間'), start),
-        el('div', { class: 'grow' }, el('label', {}, '間隔（分）'), interval)),
+      el('label', {}, 'プラン名'), plan,
+      el('label', {}, 'お一人様の料金（円）'), fee,
+      el('label', {}, '1組2名のときの追加料金（円・1人あたり）'), smallFee,
+      el('label', {}, 'キャンセル規定'), cancel,
+      el('label', {}, '特記事項（幹事用）'), notesAdmin,
+      el('label', {}, '特記事項（LINEの案内文に入れる）'), notesLine,
       el('label', { class: 'chk' }, party, '表彰式・打上げあり（出欠フォームで参加可否を聞く）'),
       el('label', {}, '出欠の締切（空欄なら締切なし）'), deadline,
-      el('p', { class: 'muted' }, 'ニアピン・ドラコンのホールは当日に入力できるようにします（後のステップで追加）。')),
+      el('p', { class: 'muted' }, 'スタート時間の枠は、コンペを作ったあとに、コンペ画面で登録します。ニアピン・ドラコンのホールは当日に入力できるようにします（後のステップで追加）。')),
     el('button', {
       class: 'btn pri block', onclick: () => guard(async () => {
         if (!name.value.trim()) return toast('コンペ名を入力してください');
@@ -364,8 +371,12 @@ async function viewEventForm(id) {
           event_date: date.value || null,
           course_name: strOrNull(course.value),
           group_count_hint: numOrNull(groups.value),
-          start_time: start.value || null,
-          start_interval_min: numOrNull(interval.value) || 8,
+          plan_name: strOrNull(plan.value),
+          fee_per_person: numOrNull(fee.value),
+          small_group_fee: numOrNull(smallFee.value),
+          cancel_policy: strOrNull(cancel.value),
+          notes_admin: strOrNull(notesAdmin.value),
+          notes_line: strOrNull(notesLine.value),
           has_party: party.checked,
           form_deadline: deadline.value ? new Date(deadline.value).toISOString() : null
         };
@@ -393,12 +404,14 @@ async function viewEventForm(id) {
 /* ====== コンペ詳細（出欠管理） ====== */
 async function viewEvent(id) {
   const sb = state.sb;
-  const [evR, enR, plR] = await Promise.all([
+  const [evR, enR, plR, grR] = await Promise.all([
     sb.from('events').select('*').eq('id', id).single(),
     sb.from('entries').select('*').eq('event_id', id).order('created_at'),
-    sb.from('players').select('*').order('kana', { ascending: true, nullsFirst: false }).order('name')
+    sb.from('players').select('*').order('kana', { ascending: true, nullsFirst: false }).order('name'),
+    sb.from('groups').select('*').eq('event_id', id).order('start_time').order('start_course')
   ]);
   const ev = must(evR);
+  const slots = must(grR);
   const entries = must(enR);
   const players = must(plR);
   const pById = new Map(players.map((p) => [p.id, p]));
@@ -515,15 +528,101 @@ async function viewEvent(id) {
     fmtDate(ev.event_date) + (ev.course_name ? ' ' + ev.course_name : ''),
     '出欠のご回答をお願いします🙏',
     formUrl,
-    ev.form_deadline ? '締切：' + fmtDateTime(ev.form_deadline) : null
+    ev.form_deadline ? '締切：' + fmtDateTime(ev.form_deadline) : null,
+    ev.notes_line ? '\n' + ev.notes_line : null
   ].filter(Boolean).join('\n');
+
+  // ---- 予約内容 ----
+  const yen = (n) => '¥' + Number(n).toLocaleString('ja-JP');
+  const infoLines = [
+    ev.plan_name ? 'プラン：' + ev.plan_name : null,
+    ev.fee_per_person != null ? `お一人様：${yen(ev.fee_per_person)}` + (ev.small_group_fee ? `（1組2名のときは +${yen(ev.small_group_fee)}）` : '') : null
+  ].filter(Boolean);
+  const infoCard = (infoLines.length || ev.cancel_policy || ev.notes_admin || ev.notes_line) ? el('div', { class: 'card' },
+    el('strong', {}, 'ゴルフ場の予約内容'),
+    infoLines.map((t) => el('div', { class: 'muted' }, t)),
+    ev.cancel_policy && el('div', { class: 'note' }, 'キャンセル：' + ev.cancel_policy),
+    ev.notes_admin && el('div', { class: 'note', style: 'white-space:pre-wrap' }, '幹事メモ：' + ev.notes_admin),
+    ev.notes_line && el('div', { class: 'note', style: 'white-space:pre-wrap' }, 'LINE案内に入る注意：' + ev.notes_line)) : null;
+
+  // ---- スタート枠 ----
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const courseOf = (t) => (/^(out|アウト)/i.test(t) ? 'OUT' : 'IN');
+  function parseSlots(text) {
+    const out = [];
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/(IN|OUT|イン|アウト)\D*?(\d{1,2})\s*[:：]\s*(\d{2})/i);
+      if (m) out.push({ course: courseOf(m[1]), time: `${pad2(m[2])}:${m[3]}` });
+    }
+    out.sort((a, b) => a.time.localeCompare(b.time) || (a.course === b.course ? 0 : a.course === 'OUT' ? -1 : 1));
+    return out;
+  }
+  const slotText = el('textarea', { style: 'min-height:120px', placeholder: '1行に1枠。例：\nINコース 08:37\nOUTコース 08:37\nIN 08:45' });
+  const gStart = el('input', { type: 'time' });
+  const gPattern = el('input', { value: '8,7', placeholder: '8,7（この間隔を繰り返す）' });
+  const gCount = el('input', { type: 'number', inputmode: 'numeric', value: '8' });
+  const gCourse = el('select', { value: 'both' }, el('option', { value: 'both' }, 'IN・OUTの両方'), el('option', { value: 'IN' }, 'INのみ'), el('option', { value: 'OUT' }, 'OUTのみ'));
+  const slotRow = (g) => {
+    const t = el('input', { type: 'time', value: hhmm(g.start_time), style: 'width:auto' });
+    const c = el('select', { value: g.start_course || 'IN', style: 'width:auto' }, el('option', { value: 'OUT' }, 'OUT'), el('option', { value: 'IN' }, 'IN'));
+    const save = () => guard(async () => {
+      must(await sb.from('groups').update({ start_time: t.value || null, start_course: c.value }).eq('id', g.id));
+      toast('保存しました');
+    });
+    t.addEventListener('change', save); c.addEventListener('change', save);
+    return el('div', { class: 'row', style: 'padding:4px 0;border-top:1px solid var(--bd);margin-top:4px' },
+      el('span', { class: 'muted', style: 'width:2.5em' }, g.group_no + '組'), t, c,
+      el('button', { class: 'btn sm bad', onclick: () => guard(async () => {
+        must(await sb.from('groups').delete().eq('id', g.id));
+        refresh();
+      }) }, '削除'));
+  };
+  const slotsCard = el('div', { class: 'card' },
+    el('div', { class: 'row between' },
+      el('strong', {}, `スタート枠（${slots.length}組）`),
+      el('span', { class: 'muted' }, slots.length ? `最大${slots.length * 4}名` : '未登録')),
+    slots.length > 0 && el('div', { style: 'margin-top:6px' }, slots.map(slotRow)),
+    el('details', { open: slots.length === 0 },
+      el('summary', {}, slots.length ? '枠を作り直す・追加する' : '枠を登録する'),
+      el('label', {}, '予約画面の時間を貼り付け（IN/OUTと時刻の行だけ拾います）'), slotText,
+      el('details', {},
+        el('summary', {}, '間隔から文章を作る（7分・8分の交互など）'),
+        el('div', { class: 'row', style: 'flex-wrap:nowrap' },
+          el('div', { class: 'grow' }, el('label', {}, '最初の時刻'), gStart),
+          el('div', { class: 'grow' }, el('label', {}, '枠数（各コース）'), gCount)),
+        el('label', {}, '間隔（分）をカンマ区切りで。順番に繰り返します'), gPattern,
+        el('label', {}, 'コース'), gCourse,
+        el('p', {}, el('button', { class: 'btn sm', onclick: () => {
+          if (!gStart.value) return toast('最初の時刻を入れてください');
+          const pat = gPattern.value.split(/[,，、\s]+/).map((x) => parseInt(x, 10)).filter((n) => n > 0);
+          if (!pat.length) return toast('間隔を入れてください（例：8,7）');
+          const n = Math.min(Math.max(numOrNull(gCount.value) || 1, 1), 40);
+          let [h, m] = gStart.value.split(':').map(Number);
+          let mins = h * 60 + m;
+          const lines = [];
+          for (let i = 0; i < n; i++) {
+            const tm = `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`;
+            if (gCourse.value !== 'IN') lines.push('OUTコース ' + tm);
+            if (gCourse.value !== 'OUT') lines.push('INコース ' + tm);
+            mins += pat[i % pat.length];
+          }
+          slotText.value = lines.join('\n');
+        } }, '文章を作る'))),
+      el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(async () => {
+        const list = parseSlots(slotText.value);
+        if (!list.length) return toast('「IN 08:37」のような行が見つかりません');
+        if (slots.length && !confirm(`今の${slots.length}枠を消して、${list.length}枠に作り直します。組分け済みの内容も消えます。よろしいですか？`)) return;
+        if (slots.length) must(await sb.from('groups').delete().eq('event_id', id));
+        must(await sb.from('groups').insert(list.map((x, i) => ({ event_id: id, group_no: i + 1, start_time: x.time, start_course: x.course }))));
+        toast(`${list.length}枠を登録しました`);
+        refresh();
+      }) }, slots.length ? '作り直す' : '枠を登録'))));
 
   return [
     el('div', { class: 'row between' },
       el('div', {},
         el('h2', { style: 'margin-bottom:0' }, ev.name),
-        el('div', { class: 'muted' }, fmtDate(ev.event_date) + (ev.course_name ? ' ・ ' + ev.course_name : '') +
-          (ev.start_time ? ` ・ ${hhmm(ev.start_time)}〜（${ev.start_interval_min}分間隔）` : ''))),
+        el('div', { class: 'muted' }, fmtDate(ev.event_date) + (ev.course_name ? ' ・ ' + ev.course_name : ''))),
       el('a', { class: 'btn sm', href: `#/event/${id}/edit` }, '編集')),
     el('div', { class: 'stats', style: 'margin-top:10px' },
       el('div', {}, el('b', {}, joined.length), el('span', {}, '参加')),
@@ -532,6 +631,8 @@ async function viewEvent(id) {
       ev.has_party
         ? el('div', {}, el('b', {}, partyJoin), el('span', {}, '打上げ'))
         : el('div', {}, el('b', {}, pending.length), el('span', {}, '承認待ち'))),
+    infoCard,
+    slotsCard,
     el('div', { class: 'card' },
       el('div', { class: 'row between' },
         el('strong', {}, '出欠フォーム'),
