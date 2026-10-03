@@ -1177,6 +1177,27 @@ async function viewAwards(id) {
     sex: el('select', {}, el('option', { value: '' }, '男女の区別なし'), el('option', { value: 'M' }, '男性だけ'), el('option', { value: 'F' }, '女性だけ')),
     sp: el('select', {}, el('option', { value: '' }, '選んでください'), ...specials.map((r) => el('option', { value: r.id }, spTitle(r)))) };
 
+  let editingId = null;
+  const editCard = (a) => {
+    const f = { name: el('input', { value: a.name }), rule: el('select', {},
+      el('option', { value: 'net_rank' }, 'ネットの順位'), el('option', { value: 'gross_rank' }, 'グロスの順位'),
+      el('option', { value: 'booby' }, 'ネットの下から数える（ブービー）'), el('option', { value: 'special' }, 'ニアピン・ドラコン'), el('option', { value: 'manual' }, '手で決める（飛び賞など）')),
+      rank: el('input', { type: 'number', inputmode: 'numeric', value: a.rank_no ?? '', placeholder: '何位（ブービーは下から何番目）' }),
+      sex: el('select', {}, el('option', { value: '' }, '男女の区別なし'), el('option', { value: 'M' }, '男性だけ'), el('option', { value: 'F' }, '女性だけ')),
+      sp: el('select', {}, el('option', { value: '' }, '選んでください'), ...specials.map((r) => el('option', { value: r.id }, spTitle(r)))) };
+    f.rule.value = a.rule; f.sex.value = a.sex || ''; f.sp.value = a.special_id || '';
+    return el('div', { class: 'card' }, el('strong', {}, '賞を編集'),
+      el('label', {}, '賞の名前'), f.name, el('label', {}, '決め方'), f.rule,
+      el('label', {}, '何位（任意）'), f.rank, el('label', {}, '男女'), f.sex, el('label', {}, 'ニアピン・ドラコン（その賞のとき）'), f.sp,
+      el('div', { class: 'row', style: 'margin-top:8px' },
+        el('button', { class: 'btn pri grow', onclick: () => {
+          const name = f.name.value.trim(); if (!name) return toast('賞の名前を入れてください');
+          if (f.rule.value === 'special' && !f.sp.value) return toast('ニアピン・ドラコンを選んでください');
+          save(a, { name, rule: f.rule.value, rank_no: numOrNull(f.rank.value), sex: f.sex.value || null, special_id: f.rule.value === 'special' ? f.sp.value : null })
+            .then(() => { editingId = null; draw(); });
+        } }, '保存'),
+        el('button', { class: 'btn grow', onclick: () => { editingId = null; draw(); } }, 'やめる')));
+  };
   function draw() {
     const cnt = new Map(); for (const a of awards) if (a.winner_entry_id) cnt.set(a.winner_entry_id, (cnt.get(a.winner_entry_id) || 0) + 1);
     const total = awards.reduce((t, a) => t + (a.price || 0) * (a.qty || 1), 0);
@@ -1194,6 +1215,7 @@ async function viewAwards(id) {
         el('div', { style: diff != null && diff < 0 ? 'color:#c62828' : '' }, el('b', {}, diff == null ? '-' : (diff < 0 ? '−' + yen(-diff) : yen(diff))), el('span', {}, diff == null ? '差額' : (diff < 0 ? '予算オーバー' : 'あと使える額')))),
       unpriced ? el('p', { class: 'muted' }, `金額が未入力の商品が${unpriced}件あります（合計に入っていません）`) : null));
     const cards = sorted().map((a) => {
+      if (a.id === editingId) return editCard(a);
       const c = candidates(a);
       const sel = el('select', {}, el('option', { value: '' }, '未定'), ...people.map((e) => el('option', { value: e.id }, (c.includes(e.id) ? '★ ' : '') + e.name)));
       sel.value = a.winner_entry_id || '';
@@ -1207,10 +1229,12 @@ async function viewAwards(id) {
       const dup = a.winner_entry_id && cnt.get(a.winner_entry_id) > 1;
       return el('div', { class: 'card' },
         el('div', { class: 'row between' }, el('strong', {}, a.name),
-          el('button', { class: 'btn sm', onclick: () => guard(async () => {
-            if (!confirm(`「${a.name}」を削除しますか？`)) return;
-            must(await sb.from('awards').delete().eq('id', a.id)); awards = awards.filter((x) => x.id !== a.id); draw();
-          }) }, '削除')),
+          el('div', { class: 'row', style: 'gap:6px' },
+            el('button', { class: 'btn sm', onclick: () => { editingId = a.id; draw(); } }, '編集'),
+            el('button', { class: 'btn sm', onclick: () => guard(async () => {
+              if (!confirm(`「${a.name}」を削除しますか？`)) return;
+              must(await sb.from('awards').delete().eq('id', a.id)); awards = awards.filter((x) => x.id !== a.id); draw();
+            }) }, '削除'))),
         el('div', { class: 'muted' }, ruleTxt(a)),
         el('label', {}, '商品'), prize,
         el('div', { class: 'row', style: 'flex-wrap:nowrap' },
