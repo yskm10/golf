@@ -1080,7 +1080,7 @@ async function viewResults(id) {
 async function viewAwards(id) {
   const sb = state.sb;
   const [evR, enR, spR, awR] = await Promise.all([
-    sb.from('events').select('id,name').eq('id', id).single(),
+    sb.from('events').select('*').eq('id', id).single(),
     sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved'),
     sb.from('special_records').select('*').eq('event_id', id),
     sb.from('awards').select('*').eq('event_id', id)
@@ -1089,6 +1089,15 @@ async function viewAwards(id) {
   if (awR.error) return [el('div', { class: 'row between' }, el('h2', {}, '賞・商品'), el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
     el('div', { class: 'card' }, 'この機能を使うには、データベースの準備（SQL）が必要です。')];
   let awards = awR.data || [];
+  const yen = (n) => Number(n).toLocaleString('ja-JP') + '円';
+  const budgetIn = el('input', { type: 'number', inputmode: 'numeric', value: ev.prize_budget ?? '', placeholder: '例：200000' });
+  budgetIn.addEventListener('change', () => guard(async () => {
+    const v = budgetIn.value === '' ? null : parseInt(budgetIn.value, 10);
+    if (v != null && (!Number.isFinite(v) || v < 0)) return toast('予算は0以上の数字で入れてください');
+    must(await sb.from('events').update({ prize_budget: v }).eq('id', id));
+    ev.prize_budget = v; draw();
+  }));
+  const sumBox = el('div', {});
   const KIND = { nearpin: 'ニアピン', drive: 'ドラコン' };
   const spTitle = (r) => `${r.course ? r.course + ' ' : ''}${KIND[r.kind]} ${r.hole_no ? r.hole_no + '番' : '未定'}`;
   const nameOf = (eid) => { const e = people.find((x) => x.id === eid); return e ? e.name : ''; };
@@ -1156,6 +1165,20 @@ async function viewAwards(id) {
 
   function draw() {
     const cnt = new Map(); for (const a of awards) if (a.winner_entry_id) cnt.set(a.winner_entry_id, (cnt.get(a.winner_entry_id) || 0) + 1);
+    const total = awards.reduce((t, a) => t + (a.price || 0) * (a.qty || 1), 0);
+    const unpriced = awards.filter((a) => a.price == null).length;
+    const diff = ev.prize_budget != null ? ev.prize_budget - total : null;
+    const hint = ev.compe_fee ? Number(ev.compe_fee) * people.length : 0;
+    sumBox.replaceChildren(el('div', { class: 'card' }, el('strong', {}, '商品の予算'),
+      el('label', {}, '予算（円）'), budgetIn,
+      hint && ev.prize_budget !== hint ? el('p', { class: 'muted' },
+        `目安：コンペ費${yen(ev.compe_fee)}×参加${people.length}人＝${yen(hint)}　`,
+        el('button', { class: 'btn sm', onclick: () => { budgetIn.value = hint; budgetIn.dispatchEvent(new Event('change')); } }, 'この金額を予算にする')) : null,
+      el('div', { class: 'stats', style: 'grid-template-columns:repeat(3,1fr);margin-top:8px' },
+        el('div', {}, el('b', {}, yen(total)), el('span', {}, '商品の合計')),
+        el('div', {}, el('b', {}, ev.prize_budget != null ? yen(ev.prize_budget) : '-'), el('span', {}, '予算')),
+        el('div', { style: diff != null && diff < 0 ? 'color:#c62828' : '' }, el('b', {}, diff == null ? '-' : (diff < 0 ? '−' + yen(-diff) : yen(diff))), el('span', {}, diff == null ? '差額' : (diff < 0 ? '予算オーバー' : 'あと使える額')))),
+      unpriced ? el('p', { class: 'muted' }, `金額が未入力の商品が${unpriced}件あります（合計に入っていません）`) : null));
     const cards = sorted().map((a) => {
       const c = candidates(a);
       const sel = el('select', {}, el('option', { value: '' }, '未定'), ...people.map((e) => el('option', { value: e.id }, (c.includes(e.id) ? '★ ' : '') + e.name)));
@@ -1163,6 +1186,10 @@ async function viewAwards(id) {
       sel.addEventListener('change', () => save(a, { winner_entry_id: sel.value || null }).then(draw));
       const prize = el('input', { value: a.prize || '', placeholder: '商品（例：松阪牛すき焼きセット）' });
       prize.addEventListener('change', () => save(a, { prize: strOrNull(prize.value) }));
+      const price = el('input', { type: 'number', inputmode: 'numeric', value: a.price ?? '', placeholder: '1個あたり（円）' });
+      price.addEventListener('change', () => save(a, { price: price.value === '' ? null : Math.max(0, parseInt(price.value, 10) || 0) }).then(draw));
+      const qty = el('input', { type: 'number', inputmode: 'numeric', value: a.qty ?? 1, min: 1 });
+      qty.addEventListener('change', () => save(a, { qty: Math.max(1, parseInt(qty.value, 10) || 1) }).then(draw));
       const dup = a.winner_entry_id && cnt.get(a.winner_entry_id) > 1;
       return el('div', { class: 'card' },
         el('div', { class: 'row between' }, el('strong', {}, a.name),
@@ -1172,12 +1199,17 @@ async function viewAwards(id) {
           }) }, '削除')),
         el('div', { class: 'muted' }, ruleTxt(a)),
         el('label', {}, '商品'), prize,
+        el('div', { class: 'row', style: 'flex-wrap:nowrap' },
+          el('div', { class: 'grow' }, el('label', {}, '金額（1個・円）'), price),
+          el('div', { style: 'width:90px' }, el('label', {}, '数量'), qty)),
+        a.price != null && (a.qty || 1) > 1 ? el('div', { class: 'muted' }, `小計 ${yen(a.price * a.qty)}`) : null,
         el('label', {}, '受賞者'), sel,
         a.rule !== 'manual' && c.length > 1 ? el('div', { class: 'note' }, `同スコアで決まりません。候補（★）：${c.map(nameOf).join('、')}`) : null,
         a.rule !== 'manual' && c.length === 0 && !a.winner_entry_id ? el('div', { class: 'muted' }, '対象の成績がまだありません') : null,
         dup ? el('div', { class: 'note' }, `⚠ ${nameOf(a.winner_entry_id)}さんは${cnt.get(a.winner_entry_id)}つの賞に入っています`) : null);
     });
     root.replaceChildren(
+      sumBox,
       !awards.length ? el('div', { class: 'card' }, el('p', {}, 'まだ賞がありません。ひな形から始めると楽です。'), el('button', { class: 'btn pri block', onclick: preset }, '優勝・準優勝・3位・ベスグロ・ブービー・ニアピン/ドラコンを入れる')) : null,
       ...cards,
       el('div', { class: 'card' }, el('strong', {}, '賞を追加'),

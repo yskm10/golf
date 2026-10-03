@@ -18,7 +18,7 @@
 | ニアピン・ドラコン | `#/event/<id>/special` | ホームは当日でも入力可、OUT組／IN組ごと、コースを回る順に並ぶ |
 | 集金チェック | `#/event/<id>/collect` | 受取トグル、金額変更、2名組追加料金、未回収コピー |
 | 成績・順位 | `#/event/<id>/results` | 成績表の写真から読み取り（Edge Function `read-results`）、手入力 |
-| 賞・商品 | `#/event/<id>/awards` | 賞ごとに商品を登録、受賞者を自動割り当て（ネット順位／グロス／ブービー／ニアピン等） |
+| 賞・商品 | `#/event/<id>/awards` | 賞ごとに商品・金額・数量を登録、受賞者を自動割り当て（ネット順位／グロス／ブービー／ニアピン等）。商品の予算と差額も計算（`events.prize_budget`、`awards.price/qty`） |
 | 名簿 | `#/players` | 追加・まとめて追加（CSV）・他チームの名簿コピー |
 | チーム | `#/teams` | 端末内のチーム切り替え・作成・URLで追加 |
 
@@ -38,7 +38,7 @@
 - 出欠フォームは security definer のRPC：`form_get`（名簿は返さない）、`form_submit`（名前一致で本人登録／なければ承認待ち）。承認は `approve_entry`。
 - トリガー：`compose_name()`（姓名から name を「姓 名」に組み立て）、`set_updated_at()`。
 - Edge Function：`read-booking`（予約スクショ）、`read-results`（成績表の写真）。トークンで幹事を確認、1チーム24時間30回まで（`read_log`）。モデル `claude-sonnet-5-5`、`tool_choice` は auto（強制は未対応）。シークレット `ANTHROPIC_API_KEY`（Supabase側に設定済み）。
-- SQLの履歴は `supabase/*.sql`（`form_noplayers.sql`、`group_rules.sql`、`special_course.sql`、`collect.sql`、`results_awards.sql`）。それ以前（姓名分割・よみ・料金など）は SQL Editor で実行済み。
+- SQLの履歴は `supabase/*.sql`（`form_noplayers.sql`、`group_rules.sql`、`special_course.sql`、`collect.sql`、`results_awards.sql`、`prize_budget.sql`）。それ以前（姓名分割・よみ・料金など）は SQL Editor で実行済み。
 
 ## 作業の進め方（重要）
 1. 機能ごとにブランチを切って実装 → 動作確認（Playwright＋模擬クライアントで画面、`execute_sql` で読み取りだけ）。
