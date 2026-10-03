@@ -38,7 +38,7 @@
 - 出欠フォームは security definer のRPC：`form_get`（名簿は返さない）、`form_submit`（名前一致で本人登録／なければ承認待ち）。承認は `approve_entry`。
 - トリガー：`compose_name()`（姓名から name を「姓 名」に組み立て）、`set_updated_at()`。
 - Edge Function：`read-booking`（予約スクショ）、`read-results`（成績表の写真）。トークンで幹事を確認、1チーム24時間30回まで（`read_log`）。モデル `claude-sonnet-5-5`、`tool_choice` は auto（強制は未対応）。シークレット `ANTHROPIC_API_KEY`（Supabase側に設定済み）。
-- SQLの履歴は `supabase/*.sql`（`form_noplayers.sql`、`group_rules.sql`、`special_course.sql`、`collect.sql`、`results_awards.sql`、`prize_budget.sql`）。それ以前（姓名分割・よみ・料金など）は SQL Editor で実行済み。
+- SQLの履歴は `supabase/*.sql`（`form_noplayers.sql`、`group_rules.sql`、`special_course.sql`、`collect.sql`、`results_awards.sql`、`prize_budget.sql`、`fix_duplicates.sql`）。それ以前（姓名分割・よみ・料金など）は SQL Editor で実行済み。
 
 ## 作業の進め方（重要）
 1. 機能ごとにブランチを切って実装 → 動作確認（Playwright＋模擬クライアントで画面、`execute_sql` で読み取りだけ）。
@@ -57,5 +57,6 @@
 - **アプリ化・公開**：まず自分たちで使ってみて、便利なら検討。方針は「無料＋広告、有料で広告なし・AI読み取り制限緩和」。公開するなら、ログイン（今は幹事用URLが鍵）、AI費用の上限、チーム作成の制限、プライバシーポリシー、App Store審査（Webの包みだけだと不可の恐れ）、アカウント削除機能が必要。データ量は小さい（1コンペ約30〜50KB）ので、DBは Supabase の有料プランで足りる見込み。コアサーバーへの移行は、裏側の作り直しが大きく割に合わない。
 
 ## 気をつけること
+- 名簿を作り直すと、出欠の `player_id` が空になる（孤児）。同じ人を追加すると二重になるため、幹事画面の追加と出欠フォームは、同名の孤児があればつなぎ直す（`putEntry` / `form_submit`）。
 - 画面側の鍵（`sb_publishable_…`）は公開してよい種類。管理トークンはURLに入っているので、幹事以外に渡さない。
 - 名前が違う漢字（渡辺／渡邊）だと別人として承認待ちになる。幹事が承認画面で見比べる。

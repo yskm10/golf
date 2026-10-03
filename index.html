@@ -591,10 +591,16 @@ async function viewEvent(id) {
     must(await sb.from('entries').delete().eq('id', e.id));
     refresh();
   });
+  // 出欠に追加。名簿を作り直して名簿とのつながりが切れた同名の出欠があれば、新しく作らず、その人につなぎ直す
+  const putEntry = async (p, attendance) => {
+    const ex = must(await sb.from('entries').select('id,name,player_id').eq('event_id', id));
+    const orphan = ex.find((e) => !e.player_id && norm(e.name) === norm(p.name));
+    const row = { player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana, attendance, approval: 'approved' };
+    if (orphan) must(await sb.from('entries').update(row).eq('id', orphan.id));
+    else must(await sb.from('entries').insert({ event_id: id, ...row, source: 'admin' }));
+  };
   const addEntry = (p, attendance) => guard(async () => {
-    must(await sb.from('entries').insert({
-      event_id: id, player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana, attendance, approval: 'approved', source: 'admin'
-    }));
+    await putEntry(p, attendance);
     refresh();
   });
 
@@ -663,9 +669,7 @@ async function viewEvent(id) {
             affiliation: strOrNull(nAff.value),
             avg_score: scoreOrNull(nAvg.value), tee: nTee.value || null
           }).select().single());
-          must(await sb.from('entries').insert({
-            event_id: id, player_id: p.id, name: p.name, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana, attendance: 'join', approval: 'approved', source: 'admin'
-          }));
+          await putEntry(p, 'join');
           toast('名簿と出欠に追加しました');
           refresh();
         })
