@@ -973,6 +973,15 @@ async function viewImport() {
   ];
 }
 
+// ティーの色から性別を推定：赤＝女、白・青・金・黒＝男、未設定＝不明（成績画面で手で変えられる）
+const sexFromTee = (tee) => (tee === 'red' ? 'F' : (tee ? 'M' : null));
+async function withDerivedSex(sb, entries) {
+  const pl = must(await sb.from('players').select('id,tee'));
+  const pBy = new Map(pl.map((p) => [p.id, p]));
+  for (const e of entries) e._dsex = sexFromTee(e.tee || (pBy.get(e.player_id) || {}).tee || null);
+  return entries;
+}
+
 /* ====== 成績・順位 ====== */
 async function viewResults(id) {
   const sb = state.sb;
@@ -981,7 +990,7 @@ async function viewResults(id) {
     sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved')
   ]);
   const ev = must(evR);
-  const people = must(enR).filter((e) => e.attendance === 'join');
+  const people = await withDerivedSex(sb, must(enR).filter((e) => e.attendance === 'join'));
   const root = el('div', {});
   let preview = null;
   const order = () => [...people].sort((a, b) => (a.result_rank ?? 999) - (b.result_rank ?? 999)
@@ -1053,7 +1062,8 @@ async function viewResults(id) {
           el('button', { class: 'btn', onclick: () => { preview = null; msg.textContent = ''; draw(); } }, 'やめる'))));
     }
     for (const e of order()) {
-      const sex = el('select', {}, el('option', { value: '' }, '-'), el('option', { value: 'M' }, '男'), el('option', { value: 'F' }, '女'));
+      const SX = { M: '男', F: '女' };
+      const sex = el('select', {}, el('option', { value: '' }, e._dsex ? `自動:${SX[e._dsex]}` : '-'), el('option', { value: 'M' }, '男'), el('option', { value: 'F' }, '女'));
       sex.value = e.sex || ''; sex.addEventListener('change', () => save(e, { sex: sex.value || null }));
       nodes.push(el('div', { class: 'card', style: 'padding:10px' },
         el('strong', {}, e.name),
@@ -1070,7 +1080,7 @@ async function viewResults(id) {
       el('div', {}, el('h2', { style: 'margin-bottom:0' }, '成績・順位'), el('div', { class: 'muted' }, ev.name)),
       el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
     el('div', { class: 'card' }, readBtn, msg, fileIn,
-      el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。'),
+      el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、ティーが赤なら女、白・青・金・黒なら男として自動で扱います（変えたい人だけ選び直してください）。'),
       el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す'))),
     root
   ];
@@ -1085,7 +1095,7 @@ async function viewAwards(id) {
     sb.from('special_records').select('*').eq('event_id', id),
     sb.from('awards').select('*').eq('event_id', id)
   ]);
-  const ev = must(evR), people = must(enR).filter((e) => e.attendance === 'join'), specials = must(spR);
+  const ev = must(evR), people = await withDerivedSex(sb, must(enR).filter((e) => e.attendance === 'join')), specials = must(spR);
   if (awR.error) return [el('div', { class: 'row between' }, el('h2', {}, '賞・商品'), el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
     el('div', { class: 'card' }, 'この機能を使うには、データベースの準備（SQL）が必要です。')];
   let awards = awR.data || [];
@@ -1116,7 +1126,7 @@ async function viewAwards(id) {
   const candidates = (a) => {
     if (a.rule === 'net_rank') { const m = netRank(); return people.filter((e) => m.get(e.id) === (a.rank_no || 1)).map((e) => e.id); }
     if (a.rule === 'gross_rank') {
-      const l = people.filter((e) => e.gross != null && (!a.sex || e.sex === a.sex));
+      const l = people.filter((e) => e.gross != null && (!a.sex || (e.sex || e._dsex) === a.sex));
       return l.filter((e) => 1 + l.filter((x) => x.gross < e.gross).length === (a.rank_no || 1)).map((e) => e.id);
     }
     if (a.rule === 'booby') {
