@@ -1499,18 +1499,23 @@ async function loadGroupData(id) {
   const pBy = new Map(players.map((p) => [p.id, p]));
   const eff = (e) => {
     const p = pBy.get(e.player_id) || {};
-    return { aff: e.affiliation ?? p.affiliation ?? null, avg: e.avg_score ?? p.avg_score ?? null, tee: e.tee ?? p.tee ?? null };
+    const tee = e.tee ?? p.tee ?? null;
+    return { aff: e.affiliation ?? p.affiliation ?? null, avg: e.avg_score ?? p.avg_score ?? null, tee, sex: e.sex ?? sexFromTee(tee) };
   };
   return { ev, entries, slots, members, rules, rulesOk, eff };
 }
 
 // 平均スコアをそろえ、同じ所属が同じ組に偏らないよう振り分ける。
 // rules: [{kind:'together'|'apart', a, b}]（entry id）
-function autoAssign(people, g, wScore, wAff, rules) {
+function autoAssign(people, g, wScore, wAff, rules, wSex) {
+  wSex = wSex ?? 0;
   rules = rules || [];
   const known = people.map((p) => p.avg).filter((v) => v != null).sort((a, b) => a - b);
   const med = known.length ? known[Math.floor(known.length / 2)] : 100;
-  const P = new Map(people.map((p) => [p.id, { id: p.id, s: p.avg ?? med, a: p.aff ? noSpace(p.aff).toLowerCase() : null }]));
+  const P = new Map(people.map((p) => [p.id, { id: p.id, s: p.avg ?? med, a: p.aff ? noSpace(p.aff).toLowerCase() : null, x: p.sex || null }]));
+  // 男女比：性別がわかる人のうち女性の割合（組ごとにこの割合に近づける）
+  const knownSex = [...P.values()].filter((p) => p.x);
+  const pF = knownSex.length ? knownSex.filter((p) => p.x === 'F').length / knownSex.length : 0;
   const N = P.size, base = Math.floor(N / g), extra = N % g;
   const caps = Array.from({ length: g }, (_, i) => base + (i < extra ? 1 : 0));
   const maxCap = Math.max(...caps);
@@ -1555,6 +1560,10 @@ function autoAssign(people, g, wScore, wAff, rules) {
     const cnt = new Map();
     for (const p of l) if (p.a) cnt.set(p.a, (cnt.get(p.a) || 0) + 1);
     for (const v of cnt.values()) c += wAff * 30 * v * (v - 1) / 2;
+    if (wSex && pF > 0 && pF < 1) {
+      const ks = l.filter((p) => p.x), f = ks.filter((p) => p.x === 'F').length, ideal = ks.length * pF;
+      c += wSex * 60 * (f - ideal) * (f - ideal);
+    }
     for (let x = 0; x < l.length; x++) for (let y = x + 1; y < l.length; y++) if (apart.has(l[x].id + '|' + l[y].id)) c += 2000;
     return c;
   };
@@ -1633,6 +1642,10 @@ async function viewGroups(id) {
     el('option', { value: 'weak' }, '弱め'), el('option', { value: 'off' }, '考えない'));
   const optScore = el('select', { value: saved.score || 'normal' },
     el('option', { value: 'strong' }, '強くそろえる'), el('option', { value: 'normal' }, 'ふつう'), el('option', { value: 'weak' }, '弱め'));
+  const optSex = el('select', {},
+    el('option', { value: 'strong' }, '強くそろえる'), el('option', { value: 'normal' }, 'ふつう'),
+    el('option', { value: 'weak' }, '弱め'), el('option', { value: 'off' }, '考えない'));
+  optSex.value = saved.sex || 'normal';
   let selected = null;
   const root = el('div', {});
   const ruleKind = el('select', {}, el('option', { value: 'together' }, '同じ組にする'), el('option', { value: 'apart' }, '別の組にする'));
@@ -1744,12 +1757,12 @@ async function viewGroups(id) {
   });
 
   const runAuto = () => guard(async () => {
-    const W = { aff: { strong: 3, normal: 1, weak: 0.4, off: 0 }, score: { strong: 2, normal: 1, weak: 0.3 } };
-    ls.set('golf_auto_opts', JSON.stringify({ aff: optAff.value, score: optScore.value }));
+    const W = { aff: { strong: 3, normal: 1, weak: 0.4, off: 0 }, score: { strong: 2, normal: 1, weak: 0.3 }, sex: { strong: 3, normal: 1.5, weak: 0.5, off: 0 } };
+    ls.set('golf_auto_opts', JSON.stringify({ aff: optAff.value, score: optScore.value, sex: optSex.value }));
     const lockedIds = new Set(d.slots.filter((g) => g.locked).map((g) => g.id));
     const lockedEntries = new Set(d.members.filter((m) => lockedIds.has(m.group_id)).map((m) => m.entry_id));
     const people = d.entries.filter((e) => e.attendance === 'join' && !lockedEntries.has(e.id))
-      .map((e) => { const f = d.eff(e); return { id: e.id, avg: f.avg, aff: f.aff }; });
+      .map((e) => { const f = d.eff(e); return { id: e.id, avg: f.avg, aff: f.aff, sex: f.sex }; });
     const targets = d.slots.filter((g) => !g.locked);
     if (!people.length) return toast('組分けする参加者がいません');
     if (!targets.length) return toast('スタート枠がありません（ロックを外してください）');
@@ -1759,7 +1772,7 @@ async function viewGroups(id) {
     const g = Math.min(targets.length, Math.max(1, Math.ceil(people.length / 4)));
     const pid = new Set(people.map((p) => p.id));
     const rl = d.rules.filter((r) => pid.has(r.entry_a) && pid.has(r.entry_b)).map((r) => ({ kind: r.kind, a: r.entry_a, b: r.entry_b }));
-    const result = autoAssign(people, g, W.score[optScore.value], W.aff[optAff.value], rl);
+    const result = autoAssign(people, g, W.score[optScore.value], W.aff[optAff.value], rl, W.sex[optSex.value]);
     const useIds = targets.map((t) => t.id);
     must(await sb.from('group_members').delete().in('group_id', useIds));
     const rows = [];
@@ -1791,10 +1804,13 @@ async function viewGroups(id) {
 
     nodes.push(el('div', { class: 'card' },
       el('strong', {}, '自動で組分け'),
-      el('p', { class: 'muted' }, 'ロックした組はそのまま、残りの人を、平均スコアがそろうように振り分けます。人数が4の倍数でないときは3人組にします。'),
+      el('p', { class: 'muted' }, 'ロックした組はそのまま、残りの人を、平均スコア・所属・男女比がそろうように振り分けます（男女はティーの色から自動で判定。赤＝女、他＝男）。人数が4の倍数でないときは3人組にします。'),
       el('div', { class: 'row', style: 'flex-wrap:nowrap' },
         el('div', { class: 'grow' }, el('label', {}, '同じ所属'), optAff),
         el('div', { class: 'grow' }, el('label', {}, '組の強さ'), optScore)),
+      el('div', { class: 'row', style: 'flex-wrap:nowrap' },
+        el('div', { class: 'grow' }, el('label', {}, '男女のばらけ'), optSex),
+        el('div', { class: 'grow' })),
       el('p', {}, el('button', { class: 'btn pri block', onclick: runAuto }, '自動で組分けする')),
       el('div', { class: 'row' },
         el('button', { class: 'btn sm', onclick: () => copyText(groupsAnnouncement(d)) }, 'LINE用の組表をコピー'),
