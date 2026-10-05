@@ -1829,19 +1829,9 @@ async function viewGroups(id) {
         el('div', { style: 'margin-top:8px' }, el('label', {}, '1人目'), ruleA, el('label', {}, '2人目'), ruleB, el('label', {}, 'ルール'), ruleKind),
         el('p', {}, el('button', { class: 'btn block', onclick: addRule }, 'ルールを追加'))]));
 
-    if (selected) {
-      const e = emap.get(selected);
-      nodes.push(el('div', { class: 'card', style: 'background:#fff8e1;border-color:#f9a825' },
-        el('div', { class: 'row between' },
-          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、または移動先の組のボタンを押します。`),
-          el('div', { class: 'row' },
-            el('button', { class: 'btn sm', onclick: () => dayCancel(selected) }, '当日キャンセルにする'),
-            el('button', { class: 'btn sm', onclick: () => { selected = null; draw(); } }, '選択をやめる')))));
-    }
-
     nodes.push(el('div', { class: 'gcard' + (selected && selGroup ? ' drop' : '') },
       el('div', { class: 'row between' }, el('strong', {}, `未配置（${unassigned.length}人）`),
-        (selected && selGroup) ? el('button', { class: 'btn sm', onclick: unassign }, '未配置に戻す') : null),
+        el('button', { class: 'btn sm', style: (selected && selGroup) ? '' : 'visibility:hidden', onclick: unassign }, '未配置に戻す')),
       unassigned.length ? unassigned.map(chip) : el('div', { class: 'muted' }, 'なし')));
 
     for (const g of d.slots) {
@@ -1859,14 +1849,25 @@ async function viewGroups(id) {
             active.length === 3 && el('span', { class: 'badge' }, '3人'), ' ',
             badRule(g) && el('span', { class: 'badge warn' }, '⚠ ルール'), ' ',
             el('span', { class: 'muted' }, (avg ? `平均${avg}` : '') + (unknown ? `（不明${unknown}人）` : ''))),
-          el('button', { class: 'btn sm', onclick: () => toggleLock(g) }, g.locked ? '🔒 ロック中' : 'ロックする')),
-        ms.length ? ms.map(chip) : el('div', { class: 'muted' }, '空き'),
-        canDrop && el('button', { class: 'btn sm block', style: 'margin-top:8px', onclick: () => moveTo(g) }, `ここに入れる（${ms.length}/4）`)));
+          el('div', { class: 'row', style: 'gap:6px;flex-wrap:nowrap' },
+            canDrop && el('button', { class: 'btn sm pri', onclick: () => moveTo(g) }, `ここに入れる ${ms.length}/4`),
+            el('button', { class: 'btn sm', onclick: () => toggleLock(g) }, g.locked ? '🔒 ロック中' : 'ロックする'))),
+        ms.length ? ms.map(chip) : el('div', { class: 'muted' }, '空き')));
     }
     const cx = d.entries.filter((e) => e.attendance === 'cancelled');
     if (cx.length) nodes.push(el('div', { class: 'gcard' }, el('strong', {}, `当日キャンセル（${cx.length}人）`),
       cx.map((e) => el('div', { class: 'row between', style: 'padding:6px 0' }, el('span', {}, e.name),
         el('button', { class: 'btn sm', onclick: () => restore(e.id) }, '参加に戻す')))));
+    if (selected) {
+      const e = emap.get(selected);
+      nodes.push(el('div', { class: 'card', style: 'background:#fff8e1;border-color:#f9a825;position:sticky;bottom:8px;z-index:5;box-shadow:0 2px 10px rgba(0,0,0,.25)' },
+        el('div', { class: 'row between' },
+          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、または移動先の組のボタンを押します。`),
+          el('div', { class: 'row' },
+            el('button', { class: 'btn sm', onclick: () => dayCancel(selected) }, '当日キャンセルにする'),
+            el('button', { class: 'btn sm', onclick: () => { selected = null; draw(); } }, '選択をやめる')))));
+    }
+
     root.replaceChildren(...nodes);
   }
 
