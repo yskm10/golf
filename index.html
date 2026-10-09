@@ -114,6 +114,9 @@ function tokenFromInput(v) {
   return m ? m[1] : null;
 }
 
+// replaceChildren に null / false が混ざると「null」「false」という文字が表示されてしまうので、取り除く
+const _replaceChildren = Element.prototype.replaceChildren;
+Element.prototype.replaceChildren = function (...a) { return _replaceChildren.apply(this, a.flat(Infinity).filter((c) => c != null && c !== false)); };
 function el(tag, props, ...kids) {
   const e = document.createElement(tag);
   let value;
