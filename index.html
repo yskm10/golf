@@ -1753,6 +1753,20 @@ async function viewGroups(id) {
     if (ma) must(await sb.from('group_members').delete().eq('id', ma.id));
     await done();
   });
+  // 同じ組の中で表示順（スタート順）を1つ上げる／下げる
+  const moveInGroup = (dir) => guard(async () => {
+    const ga = selected ? groupOf(selected) : null;
+    if (!ga) return;
+    if (ga.locked) return toast('この組はロック中です');
+    const list = d.members.filter((m) => m.group_id === ga.id).sort((a, b) => a.position - b.position);
+    const i = list.findIndex((m) => m.entry_id === selected), j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    for (let k = 0; k < list.length; k++) {
+      if (list[k].position !== k) { must(await sb.from('group_members').update({ position: k }).eq('id', list[k].id)); list[k].position = k; }
+    }
+    draw();
+  });
   const toggleLock = (g) => guard(async () => {
     must(await sb.from('groups').update({ locked: !g.locked }).eq('id', g.id));
     g.locked = !g.locked;
@@ -1865,8 +1879,10 @@ async function viewGroups(id) {
       const e = emap.get(selected);
       nodes.push(el('div', { class: 'card', style: 'background:#fff8e1;border-color:#f9a825;position:sticky;bottom:8px;z-index:5;box-shadow:0 2px 10px rgba(0,0,0,.25)' },
         el('div', { class: 'row between' },
-          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、または移動先の組のボタンを押します。`),
+          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、移動先の組のボタンを押す、または↑↓で組の中の順番を変えます。`),
           el('div', { class: 'row' },
+            selGroup ? el('button', { class: 'btn sm', onclick: () => moveInGroup(-1) }, '↑ 上へ') : null,
+            selGroup ? el('button', { class: 'btn sm', onclick: () => moveInGroup(1) }, '↓ 下へ') : null,
             el('button', { class: 'btn sm', onclick: () => dayCancel(selected) }, '当日キャンセルにする'),
             el('button', { class: 'btn sm', onclick: () => { selected = null; draw(); } }, '選択をやめる')))));
     }
