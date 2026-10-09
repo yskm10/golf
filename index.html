@@ -1699,7 +1699,13 @@ async function viewGroups(id) {
     if (!selected) { selected = e.id; return draw(); }
     if (selected === e.id) { selected = null; return draw(); }
     if (ga && ga.locked) { selected = null; draw(); return toast('選んでいた人の組がロック中です'); }
-    if ((ga && gb && ga.id === gb.id) || (!ga && !gb)) { selected = e.id; return draw(); }
+    if (!ga && !gb) { selected = e.id; return draw(); }
+    if (ga && gb && ga.id === gb.id) { // 同じ組の中：2人の順番を入れ替える
+      const ma = memRow(selected), mb = memRow(e.id);
+      must(await sb.from('group_members').update({ position: mb.position }).eq('id', ma.id));
+      must(await sb.from('group_members').update({ position: ma.position }).eq('id', mb.id));
+      return done();
+    }
     const ma = memRow(selected), mb = memRow(e.id);
     if (ma && mb) {
       must(await sb.from('group_members').update({ group_id: gb.id }).eq('id', ma.id));
@@ -1879,7 +1885,7 @@ async function viewGroups(id) {
       const e = emap.get(selected);
       nodes.push(el('div', { class: 'card', style: 'background:#fff8e1;border-color:#f9a825;position:sticky;bottom:8px;z-index:5;box-shadow:0 2px 10px rgba(0,0,0,.25)' },
         el('div', { class: 'row between' },
-          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ、移動先の組のボタンを押す、または↑↓で組の中の順番を変えます。`),
+          el('span', {}, `「${e ? e.name : ''}」を選択中。入れ替える人をタップ（同じ組の人なら順番が入れ替わります）、移動先の組のボタンを押す、または↑↓で順番を変えます。`),
           el('div', { class: 'row' },
             selGroup ? el('button', { class: 'btn sm', onclick: () => moveInGroup(-1) }, '↑ 上へ') : null,
             selGroup ? el('button', { class: 'btn sm', onclick: () => moveInGroup(1) }, '↓ 下へ') : null,
