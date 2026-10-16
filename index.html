@@ -1779,6 +1779,19 @@ async function viewGroups(id) {
     draw();
   });
 
+  // 組分けのリセット：ロックしていない組の配置をすべて外して、未配置に戻す
+  const resetGroups = () => guard(async () => {
+    const lockedIds = new Set(d.slots.filter((g) => g.locked).map((g) => g.id));
+    const targets = d.slots.filter((g) => !g.locked);
+    const n = d.members.filter((m) => !lockedIds.has(m.group_id)).length;
+    if (!n) return toast('リセットする配置がありません');
+    const keep = lockedIds.size ? `\n（ロック中の${lockedIds.size}組はそのまま残します）` : '';
+    if (!confirm(`組分けをリセットします。${n}人の配置がすべて未配置に戻ります。${keep}\n\nよろしいですか？`)) return;
+    must(await sb.from('group_members').delete().in('group_id', targets.map((g) => g.id)));
+    await done();
+    toast(`${n}人を未配置に戻しました`);
+  });
+
   const runAuto = () => guard(async () => {
     const W = { aff: { strong: 3, normal: 1, weak: 0.4, off: 0 }, score: { strong: 2, normal: 1, weak: 0.3 }, sex: { strong: 3, normal: 1.5, weak: 0.5, off: 0 } };
     ls.set('golf_auto_opts', JSON.stringify({ aff: optAff.value, score: optScore.value, sex: optSex.value }));
@@ -1837,7 +1850,9 @@ async function viewGroups(id) {
       el('p', {}, el('button', { class: 'btn pri block', onclick: runAuto }, '自動で組分けする')),
       el('div', { class: 'row' },
         el('button', { class: 'btn sm', onclick: () => copyText(groupsAnnouncement(d)) }, 'LINE用の組表をコピー'),
-        el('a', { class: 'btn sm', href: `#/event/${id}/print` }, '印刷用を開く'))));
+        el('a', { class: 'btn sm', href: `#/event/${id}/print` }, '印刷用を開く')),
+      el('div', { style: 'margin-top:20px;padding-top:12px;border-top:1px solid var(--bd);text-align:right' },
+        el('button', { class: 'btn sm bad', onclick: resetGroups }, '組分けをリセット'))));
 
     fillRuleSel();
     const nm = (eid) => { const e = emap.get(eid); return e ? e.name : '（不明）'; };
