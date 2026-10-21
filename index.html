@@ -113,7 +113,6 @@ async function fetchTeam(token) {
   try { const r = await makeClient(token).from('teams').select('*').maybeSingle(); return r.data || null; } catch (e) { return null; }
 }
 function switchTo(token) {
-  if (state.token && state.token !== token) ls.set('golf_prev_token', state.token); // 「前のチームに戻る」用
   ls.set('golf_token', token);
   history.replaceState(null, '', location.pathname + '#/events');
   init();
@@ -361,15 +360,12 @@ function renderWelcome(errText) {
 }
 
 /* ====== 幹事画面：ルーティング ====== */
-function shell(active, content) {
+function shell(active, content, back) {
   const tab = (id, label, href) => el('a', { href, class: active === id ? 'on' : '' }, label);
   return el('div', {},
     el('header', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px' },
       el('h1', {}, el('a', { href: '#/teams' }, '⛳ ' + (state.team ? state.team.name : '組分け') + ' ▾')),
-      (() => {
-        const prev = getTeams().find((t) => t.token === ls.get('golf_prev_token') && t.token !== state.token);
-        return prev ? el('button', { class: 'btn sm', style: 'background:#fff', onclick: () => switchTo(prev.token) }, `← ${prev.name}に戻る`) : null;
-      })()),
+      back ? el('a', { class: 'btn sm', style: 'background:#fff', href: back.href }, back.label) : null),
     el('main', {}, content),
     el('nav', { class: 'tabs' },
       tab('events', '📅 コンペ', '#/events'),
@@ -398,9 +394,10 @@ async function routeAdmin() {
   else if (a === 'teams') { active = 'settings'; view = viewTeams; }
   else if (a === 'settings') { active = 'settings'; view = viewSettings; }
   else view = viewEvents;
+  const back = (a === 'event' && b && b !== 'new' && !c) ? { href: '#/events', label: '← コンペ一覧' } : null;
   try {
     const content = await view();
-    mount(shell(active, content));
+    mount(shell(active, content, back));
   } catch (e) {
     console.error(e);
     mount(shell(active, el('p', { class: 'err' }, errMsg(e))));
@@ -850,7 +847,6 @@ async function viewEvent(id) {
       }) }, slots.length ? '作り直す' : '枠を登録'))));
 
   return [
-    el('p', { style: 'margin:0 0 6px' }, el('a', { class: 'btn sm', href: '#/events' }, '← コンペ一覧')),
     el('div', { class: 'row between' },
       el('div', {},
         el('h2', { style: 'margin-bottom:0' }, ev.name),
@@ -2055,7 +2051,9 @@ async function viewTeams() {
     teams.map((t) => el('div', { class: 'card' },
       el('div', { class: 'row between' },
         el('div', {}, el('strong', {}, t.name), t.token === state.token && el('span', { class: 'badge', style: 'margin-left:6px' }, '使用中')),
-        t.token === state.token ? null : el('button', { class: 'btn sm pri', onclick: () => switchTo(t.token) }, '切り替える')),
+        t.token === state.token
+          ? el('a', { class: 'btn sm pri', href: '#/events' }, 'このチームで続ける')
+          : el('button', { class: 'btn sm pri', onclick: () => switchTo(t.token) }, '切り替える')),
       el('div', { style: 'margin-top:10px' },
         el('button', { class: 'btn sm', onclick: () => copyText(`${base()}?t=${t.token}`) }, '幹事用URLをコピー')),
       el('div', { style: 'margin-top:28px;padding-top:12px;border-top:1px solid var(--bd);text-align:right' },
