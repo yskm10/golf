@@ -8,11 +8,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="コンペ組分け">
+<meta name="apple-mobile-web-app-title" content="幹事キャディ">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<title>ゴルフコンペ組分け</title>
+<title>幹事キャディ</title>
 <style>
 :root{--g:#2e7d32;--g2:#e8f5e9;--bd:#dfe3e6;--tx:#1d2327;--mu:#667078;--bad:#c62828;--warn:#fff4e0}
 *{box-sizing:border-box}
@@ -312,7 +312,7 @@ function renderWelcome(errText) {
   const nameIn = el('input', { placeholder: '例：○○ゴルフ会 幹事チーム' });
   const urlIn = el('input', { placeholder: '幹事用URLを貼り付け' });
   mount(el('div', {},
-    el('header', {}, el('h1', {}, '⛳ ゴルフコンペ組分け')),
+    el('header', {}, el('h1', {}, '⛳ 幹事キャディ')),
     el('main', {},
       errText && el('p', { class: 'err' }, errText),
       el('div', { class: 'card' },
