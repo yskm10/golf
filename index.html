@@ -105,6 +105,7 @@ async function fetchTeam(token) {
   try { const r = await makeClient(token).from('teams').select('*').maybeSingle(); return r.data || null; } catch (e) { return null; }
 }
 function switchTo(token) {
+  if (state.token && state.token !== token) ls.set('golf_prev_token', state.token); // 「前のチームに戻る」用
   ls.set('golf_token', token);
   history.replaceState(null, '', location.pathname + '#/events');
   init();
@@ -337,7 +338,12 @@ function renderWelcome(errText) {
 function shell(active, content) {
   const tab = (id, label, href) => el('a', { href, class: active === id ? 'on' : '' }, label);
   return el('div', {},
-    el('header', {}, el('h1', {}, el('a', { href: '#/teams' }, '⛳ ' + (state.team ? state.team.name : '組分け') + ' ▾'))),
+    el('header', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px' },
+      el('h1', {}, el('a', { href: '#/teams' }, '⛳ ' + (state.team ? state.team.name : '組分け') + ' ▾')),
+      (() => {
+        const prev = getTeams().find((t) => t.token === ls.get('golf_prev_token') && t.token !== state.token);
+        return prev ? el('button', { class: 'btn sm', style: 'background:#fff', onclick: () => switchTo(prev.token) }, `← ${prev.name}に戻る`) : null;
+      })()),
     el('main', {}, content),
     el('nav', { class: 'tabs' },
       tab('events', '📅 コンペ', '#/events'),
@@ -1651,14 +1657,19 @@ async function viewGroups(id) {
   optSex.value = saved.sex || 'normal';
   let selected = null;
   const root = el('div', {});
-  const ruleKind = el('select', {}, el('option', { value: 'together' }, '同じ組にする'), el('option', { value: 'apart' }, '別の組にする'));
+  let kindVal = 'together';
   const ruleA = el('select', {}), ruleB = el('select', {});
+  ruleA.addEventListener('change', () => { fillRuleSel(); draw(); });
+  ruleB.addEventListener('change', () => draw());
   const fillRuleSel = () => {
     const opts = d.entries.filter((e) => e.attendance === 'join')
       .sort((x, y) => String(x.last_kana || x.name).localeCompare(String(y.last_kana || y.name), 'ja'));
-    for (const sel of [ruleA, ruleB]) {
+    const lab = slotLabels(d.slots);
+    const where = (e) => { const m = d.members.find((x) => x.entry_id === e.id); return m && lab.get(m.group_id) ? lab.get(m.group_id) : '未配置'; };
+    for (const [sel, other, ph] of [[ruleA, ruleB, '1人目を選ぶ'], [ruleB, ruleA, '2人目を選ぶ']]) {
       const cur = sel.value;
-      sel.replaceChildren(el('option', { value: '' }, '選んでください'), ...opts.map((e) => el('option', { value: e.id }, e.name)));
+      sel.replaceChildren(el('option', { value: '' }, ph),
+        ...opts.filter((e) => e.id !== other.value).map((e) => el('option', { value: e.id }, `${e.name}（${[d.eff(e).aff, where(e)].filter(Boolean).join('・')}）`)));
       sel.value = cur;
     }
   };
@@ -1666,8 +1677,8 @@ async function viewGroups(id) {
     const a = ruleA.value, b = ruleB.value;
     if (!a || !b) return toast('2人を選んでください');
     if (a === b) return toast('同じ人は選べません');
-    if (d.rules.some((r) => r.kind === ruleKind.value && ((r.entry_a === a && r.entry_b === b) || (r.entry_a === b && r.entry_b === a)))) return toast('同じルールがすでにあります');
-    const row = must(await sb.from('group_rules').insert({ event_id: id, kind: ruleKind.value, entry_a: a, entry_b: b }).select().single());
+    if (d.rules.some((r) => r.kind === kindVal && ((r.entry_a === a && r.entry_b === b) || (r.entry_a === b && r.entry_b === a)))) return toast('同じルールがすでにあります');
+    const row = must(await sb.from('group_rules').insert({ event_id: id, kind: kindVal, entry_a: a, entry_b: b }).select().single());
     d.rules.push(row);
     ruleA.value = ''; ruleB.value = '';
     draw();
@@ -1861,11 +1872,21 @@ async function viewGroups(id) {
       el('strong', {}, '同じ組・別の組のルール'),
       !d.rulesOk ? el('p', { class: 'muted' }, 'ルール機能を使うには、データベースの準備（SQL）が必要です。') : [
         el('p', { class: 'muted' }, '自動で組分けするときに守ります。ロックした組の人とのルールは自動では守れないので、手で入れ替えてください。'),
-        d.rules.map((r) => el('div', { class: 'row between', style: 'padding:6px 0;border-bottom:1px solid var(--bd)' },
-          el('div', {}, el('b', {}, `${nm(r.entry_a)} と ${nm(r.entry_b)}`), el('div', { class: 'muted' }, (r.kind === 'together' ? '同じ組' : '別の組') + '　' + stIcon[ruleState(r, d.members)])),
+        d.rules.length ? null : el('div', { class: 'muted', style: 'padding:6px 0' }, 'ルールはまだありません'),
+        d.rules.map((r) => el('div', { class: 'row between', style: 'padding:8px 0;border-bottom:1px solid var(--bd)' },
+          el('div', {},
+            el('span', { class: 'badge' + (r.kind === 'together' ? '' : ' warn') }, r.kind === 'together' ? '🤝 同じ組' : '🚫 別の組'), ' ',
+            el('b', {}, `${nm(r.entry_a)} ＋ ${nm(r.entry_b)}`),
+            el('div', { class: 'muted' }, stIcon[ruleState(r, d.members)])),
           el('button', { class: 'btn sm', onclick: () => delRule(r) }, '削除'))),
-        el('div', { style: 'margin-top:8px' }, el('label', {}, '1人目'), ruleA, el('label', {}, '2人目'), ruleB, el('label', {}, 'ルール'), ruleKind),
-        el('p', {}, el('button', { class: 'btn block', onclick: addRule }, 'ルールを追加'))]));
+        el('div', { style: 'margin-top:14px;padding:10px;border:1px dashed var(--bd);border-radius:10px' },
+          el('strong', {}, 'ルールを追加'),
+          el('div', { class: 'row', style: 'margin:8px 0;gap:8px;flex-wrap:nowrap' },
+            el('button', { class: 'btn grow' + (kindVal === 'together' ? ' pri' : ''), onclick: () => { kindVal = 'together'; draw(); } }, '🤝 同じ組にする'),
+            el('button', { class: 'btn grow' + (kindVal === 'apart' ? ' pri' : ''), onclick: () => { kindVal = 'apart'; draw(); } }, '🚫 別の組にする')),
+          ruleA, el('div', { style: 'height:8px' }), ruleB,
+          ruleA.value && ruleB.value ? el('p', { class: 'muted', style: 'margin:8px 0 0' }, `→ ${nm(ruleA.value)}さんと${nm(ruleB.value)}さんを「${kindVal === 'together' ? '同じ組' : '別の組'}」にします`) : null,
+          el('p', {}, el('button', { class: 'btn pri block', onclick: addRule }, 'このルールを追加')))]));
 
     nodes.push(el('div', { class: 'gcard' + (selected && selGroup ? ' drop' : '') },
       el('div', { class: 'row between' }, el('strong', {}, `未配置（${unassigned.length}人）`),
