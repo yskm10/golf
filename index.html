@@ -4,12 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#2e7d32">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="コンペ組分け">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>ゴルフコンペ組分け</title>
 <style>
 :root{--g:#2e7d32;--g2:#e8f5e9;--bd:#dfe3e6;--tx:#1d2327;--mu:#667078;--bad:#c62828;--warn:#fff4e0}
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;color:var(--tx);background:#f4f6f5;font-size:16px;line-height:1.5}
-header{background:var(--g);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:5}
+header{background:var(--g);color:#fff;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;position:sticky;top:0;z-index:5}
 header a{color:#fff;text-decoration:none}
 h1{font-size:18px;margin:0}
 h2{font-size:17px;margin:14px 0 6px}
@@ -2161,6 +2169,7 @@ async function renderForm(token) {
 }
 
 init();
+if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) { navigator.serviceWorker.register('sw.js').catch(() => {}); }
 </script>
 </body>
 </html>
