@@ -37,7 +37,7 @@
 - アクセス制御：RLS。リクエストヘッダー `x-team-token` → `current_team_id()`（security definer）でチームを判定。
 - 出欠フォームは security definer のRPC：`form_get`（名簿は返さない）、`form_submit`（名前一致で本人登録／なければ承認待ち）。承認は `approve_entry`。
 - トリガー：`compose_name()`（姓名から name を「姓 名」に組み立て）、`set_updated_at()`。
-- Edge Function：`read-booking`（予約スクショ）、`read-results`（成績表の写真）。トークンで幹事を確認、1チーム24時間30回まで（`read_log`）。既定モデルは `claude-sonnet-5-5`（Supabaseのシークレット `READ_MODEL` で既定を変えられる）。画面の「読み取りのテスト設定」から、Haiku（`claude-haiku-4-5-20251001`）に切り替えて比較できる。`read_log` に kind／model／input_tokens／output_tokens／input_type を記録（実費の見積り用）。`read-booking` は画像のほか、貼り付けた文章（`text`）も読める。`tool_choice` は auto（強制は未対応）。シークレット `ANTHROPIC_API_KEY`（Supabase側に設定済み）。
+- Edge Function：`read-booking`（予約スクショ）、`read-results`（成績表の写真）。トークンで幹事を確認、1チーム24時間30回まで（`read_log`）。`read-booking`（案内文・予約スクショ）の既定は Haiku（`claude-haiku-4-5-20251001`、シークレット `READ_MODEL_BOOKING` で変更可）。比較テストで日付・料金・枠は十分正確、費用は標準の約1/3〜1/6。ただし「含まれるもの」を1項目落としがちなのでプロンプトで漏らさないよう指示。画面の「読み取りの設定」で「詳しく読む（標準 Sonnet）」に切替可（localStorage `golf_read_model_booking`）。`read-results`（成績表）の既定は標準のまま、Haikuは未検証（キー `golf_read_model_results`）。`read_log` に kind／model／input_tokens／output_tokens／input_type を記録（実費の見積り用）。`read-booking` は画像のほか、貼り付けた文章（`text`）も読める。`tool_choice` は auto（強制は未対応）。シークレット `ANTHROPIC_API_KEY`（Supabase側に設定済み）。
 - SQLの履歴は `supabase/*.sql`（`form_noplayers.sql`、`group_rules.sql`、`special_course.sql`、`collect.sql`、`results_awards.sql`、`prize_budget.sql`、`fix_duplicates.sql`）。それ以前（姓名分割・よみ・料金など）は SQL Editor で実行済み。
 
 ## 作業の進め方（重要）
@@ -65,3 +65,5 @@
 - 名簿を作り直すと、出欠の `player_id` が空になる（孤児）。同じ人を追加すると二重になるため、幹事画面の追加と出欠フォームは、同名の孤児があればつなぎ直す（`putEntry` / `form_submit`）。
 - 画面側の鍵（`sb_publishable_…`）は公開してよい種類。管理トークンはURLに入っているので、幹事以外に渡さない。
 - 名前が違う漢字（渡辺／渡邊）だと別人として承認待ちになる。幹事が承認画面で見比べる。
+
+- コンペ詳細画面：先頭に「← コンペ一覧」、末尾に「このコンペを削除」（確認ダイアログ・回答件数表示。編集画面にも同名ボタンあり）。関連データは外部キーのON DELETE CASCADEで消える。

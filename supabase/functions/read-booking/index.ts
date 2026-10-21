@@ -9,7 +9,7 @@ const CORS = {
 const DAILY_LIMIT = 30; // 1チームあたり、24時間に読み取れる回数
 const MAX_IMAGES = 8;
 const MAX_IMAGE_CHARS = 2_000_000; // 1枚あたりのbase64の長さ上限
-const DEFAULT_MODEL = Deno.env.get('READ_MODEL') || 'claude-sonnet-5-5';
+const DEFAULT_MODEL = Deno.env.get('READ_MODEL_BOOKING') || 'claude-haiku-4-5-20251001'; // 案内文の読み取りはHaikuで十分（比較テスト済み）
 const ALLOWED_MODELS = ['claude-sonnet-5-5', 'claude-haiku-4-5-20251001']; // 画面からの比較テスト用に切り替えてよいモデル
 const MAX_TEXT_CHARS = 12000;
 
@@ -24,10 +24,10 @@ const TOOL = {
     properties: {
       event_date: { type: ['string', 'null'], description: 'プレー日 YYYY-MM-DD' },
       course_name: { type: ['string', 'null'], description: 'ゴルフ場名' },
-      includes: { type: ['string', 'null'], description: '料金に含まれるもの（昼食付、セルフ、乗用カートなど）を「・」区切りで。プラン名やアイコンから分かる範囲だけ' },
+      includes: { type: ['string', 'null'], description: '料金に含まれるもの（昼食付、セルフ、乗用カートなど）を「・」区切りで。プラン名やアイコンから分かる範囲だけ。キャディの有無、カートの種類、昼食、2サム保証など、書かれているものは1つも落とさない' },
       fee_per_person: { type: ['integer', 'null'], description: 'お一人様の総額（円）' },
       small_group_fee: { type: ['integer', 'null'], description: '1組2名のときの、お一人様あたりの追加料金（円）' },
-      cancel_policy: { type: ['string', 'null'], description: 'キャンセル料の規定を1〜3行で' },
+      cancel_policy: { type: ['string', 'null'], description: 'キャンセル料の規定を、日数と金額が分かるよう要約して1〜3行で（原文の丁寧な言い回しは省く）' },
       group_count: { type: ['integer', 'null'], description: '組数' },
       player_count: { type: ['integer', 'null'], description: '人数' },
       slots: {
@@ -42,7 +42,7 @@ const TOOL = {
           required: ['course', 'time'],
         },
       },
-      notes_admin: { type: ['string', 'null'], description: '注意事項・特記事項を、改行つきの箇条書きで' },
+      notes_admin: { type: ['string', 'null'], description: '注意事項・特記事項を、1項目1行の短い箇条書きで。書かれている項目は漏らさない（支払い、同伴者の決済ができない場合の対応、レストラン営業時間、お土産プランの受け取りなども含める）' },
       line_candidates: {
         type: 'array',
         description: '参加者に伝えたほうがよい注意を、短い1行ずつ（最大8個）',
@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
         : `今日は${today}。これはゴルフ場の予約確認画面のスクショ（複数枚・順不同・重複あり）。画面に書かれている内容だけを save_booking に入れる。\n`) +
       `- 推測しない。書かれていない項目は null。\n- 年が書かれていなければ、今日以降で最も近い日付にする。\n` +
       `- 重複したスタート枠は1つにまとめる。時刻は24時間表記の HH:MM。\n` +
-      `- notes_admin: 注意事項・特記事項を読みやすい箇条書きにする。楽天ポイント、チェックイン、スタンプラリー、クーポンの案内は入れない。\n` +
+      `- includes（含まれるもの）は、セルフ/キャディ、カート、昼食、2サム保証など、書かれている項目をすべて入れる。\n- notes_admin: 注意事項・特記事項を、項目を落とさず1項目1行の短い箇条書きにする。楽天ポイント、チェックイン、スタンプラリー、クーポンの案内は入れない。\n` +
       `- line_candidates: 同伴者に伝えるべき注意（支払い方法、持ち込み禁止、日没、休憩時間など）を短い1行ずつ。\n` +
       `必ず save_booking ツールを1回だけ呼んで結果を返す。文章での返答は不要。`;
 

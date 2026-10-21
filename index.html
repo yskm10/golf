@@ -264,17 +264,23 @@ function teeSelect(current) {
 }
 
 // 読み取りに使うAIモデルの切り替え（比較テスト用。ふだんは「標準」のまま）
-const MODEL_CHOICES = [['', '標準'], ['claude-haiku-4-5-20251001', 'Haiku（軽量・テスト用）']];
-function modelPicker() {
-  const sel = el('select', {}, ...MODEL_CHOICES.map(([v, t]) => el('option', { value: v }, t)));
-  try { sel.value = ls.get('golf_read_model') || ''; } catch (e) { /* ignore */ }
-  sel.addEventListener('change', () => { try { ls.set('golf_read_model', sel.value); } catch (e) { /* ignore */ } });
-  return el('details', { class: 'muted', style: 'margin-top:6px' }, el('summary', {}, '読み取りのテスト設定'),
+const MODEL_CHOICES = {
+  booking: [['', 'おまかせ（低コスト）'], ['claude-sonnet-5-5', '詳しく読む（標準）']],
+  results: [['', 'おまかせ（標準）'], ['claude-haiku-4-5-20251001', '低コスト（テスト）']]
+};
+function modelPicker(kind) {
+  const key = 'golf_read_model_' + kind;
+  const sel = el('select', {}, ...MODEL_CHOICES[kind].map(([v, t]) => el('option', { value: v }, t)));
+  try { sel.value = ls.get(key) || ''; } catch (e) { /* ignore */ }
+  sel.addEventListener('change', () => { try { ls.set(key, sel.value); } catch (e) { /* ignore */ } });
+  return el('details', { class: 'muted', style: 'margin-top:6px' }, el('summary', {}, '読み取りの設定'),
     el('label', {}, '読み取りに使うAI'), sel,
-    el('div', { class: 'muted' }, '精度を比べるときだけ変えます。ふだんは「標準」で使ってください。'));
+    el('div', { class: 'muted' }, kind === 'booking'
+      ? 'ふだんは「おまかせ」で使えます。読み取り結果の項目が足りないときだけ「詳しく読む」を試してください。'
+      : '精度を比べるときだけ変えます。ふだんは「おまかせ」で使ってください。'));
 }
-const readModel = () => { try { return ls.get('golf_read_model') || undefined; } catch (e) { return undefined; } };
-const usageNote = (j) => (j && j.usage && j.usage.input != null ? `（${j.model.includes('haiku') ? 'Haiku' : '標準'}・入力${j.usage.input}・出力${j.usage.output}）` : '');
+const readModel = (kind) => { try { return ls.get('golf_read_model_' + kind) || undefined; } catch (e) { return undefined; } };
+const usageNote = (j) => (j && j.usage && j.usage.input != null ? `（${j.model.includes('haiku') ? '低コスト' : '標準'}・入力${j.usage.input}・出力${j.usage.output}）` : '');
 async function fileToJpeg(file, max = 1600) {
   const url = URL.createObjectURL(file);
   try {
@@ -497,7 +503,7 @@ async function viewEventForm(id) {
       const r = await fetch(`${SB_URL}/functions/v1/read-booking`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
-        body: JSON.stringify({ images, model: readModel() })
+        body: JSON.stringify({ images, model: readModel('booking') })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
@@ -521,7 +527,7 @@ async function viewEventForm(id) {
       const r = await fetch(`${SB_URL}/functions/v1/read-booking`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
-        body: JSON.stringify({ text, model: readModel() })
+        body: JSON.stringify({ text, model: readModel('booking') })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
@@ -534,7 +540,7 @@ async function viewEventForm(id) {
     el('div', { class: 'card' },
       !id && el('div', {}, readBtn, readMsg, slotInfo, fileIn,
         el('p', { class: 'muted' }, '予約確認画面のスクショを何枚でも選べます（8枚まで）。読み取った内容は入力欄に入るだけで、保存は「保存」を押したときです。'),
-        el('label', {}, 'または、文章を貼り付けて読み取る'), pasteIn, el('p', {}, pasteBtn), modelPicker()),
+        el('label', {}, 'または、文章を貼り付けて読み取る'), pasteIn, el('p', {}, pasteBtn), modelPicker('booking')),
       el('label', {}, 'コンペ名'), name,
       el('label', {}, '開催日'), date,
       el('label', {}, 'ゴルフ場'), course,
@@ -844,6 +850,7 @@ async function viewEvent(id) {
       }) }, slots.length ? '作り直す' : '枠を登録'))));
 
   return [
+    el('p', { style: 'margin:0 0 6px' }, el('a', { class: 'btn sm', href: '#/events' }, '← コンペ一覧')),
     el('div', { class: 'row between' },
       el('div', {},
         el('h2', { style: 'margin-bottom:0' }, ev.name),
@@ -886,7 +893,17 @@ async function viewEvent(id) {
     addNew,
     (absent.length + cancelled.length) > 0 && el('details', {},
       el('summary', {}, `欠席・キャンセル（${absent.length + cancelled.length}）`),
-      [...absent, ...cancelled].map(entryRow))
+      [...absent, ...cancelled].map(entryRow)),
+    el('div', { style: 'margin-top:36px;padding-top:14px;border-top:1px solid #e5e7eb' },
+      el('button', {
+        class: 'btn bad block', onclick: () => guard(async () => {
+          const n = entries.length;
+          if (!confirm(`「${ev.name}」を削除します。\n出欠の回答（${n}件）、組分け、成績、賞のデータもすべて消え、元に戻せません。\n\n本当に削除しますか？`)) return;
+          must(await sb.from('events').delete().eq('id', id));
+          toast('削除しました');
+          location.hash = '#/events';
+        })
+      }, 'このコンペを削除'))
   ];
 }
 
@@ -1065,7 +1082,7 @@ async function viewResults(id) {
       const images = await Promise.all(files.map((f) => fileToJpeg(f)));
       const r = await fetch(`${SB_URL}/functions/v1/read-results`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
-        body: JSON.stringify({ images, model: readModel() })
+        body: JSON.stringify({ images, model: readModel('results') })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
@@ -1134,7 +1151,7 @@ async function viewResults(id) {
     el('div', { class: 'card' }, readBtn, msg, fileIn,
       el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、ティーが赤なら女、白・青・金・黒なら男として自動で扱います（変えたい人だけ選び直してください）。'),
       el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す')),
-      modelPicker()),
+      modelPicker('results')),
     root
   ];
 }
