@@ -394,7 +394,10 @@ async function routeAdmin() {
   else if (a === 'teams') { active = 'settings'; view = viewTeams; }
   else if (a === 'settings') { active = 'settings'; view = viewSettings; }
   else view = viewEvents;
-  const back = (a === 'event' && b && b !== 'new' && !c) ? { href: '#/events', label: '← コンペ一覧' } : null;
+  const back = a !== 'event' || !b ? null
+    : (b === 'new' || !c) ? { href: '#/events', label: '← コンペ一覧' }
+    : c === 'print' ? { href: `#/event/${b}/groups`, label: '← 組分けに戻る' }
+    : { href: `#/event/${b}`, label: '← コンペに戻る' };
   try {
     const content = await view();
     mount(shell(active, content, back));
@@ -1142,8 +1145,7 @@ async function viewResults(id) {
   draw();
   return [
     el('div', { class: 'row between' },
-      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '成績・順位'), el('div', { class: 'muted' }, ev.name)),
-      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '成績・順位'), el('div', { class: 'muted' }, ev.name))),
     el('div', { class: 'card' }, readBtn, msg, fileIn,
       el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、ティーが赤なら女、白・青・金・黒なら男として自動で扱います（変えたい人だけ選び直してください）。'),
       el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す')),
@@ -1162,7 +1164,7 @@ async function viewAwards(id) {
     sb.from('awards').select('*').eq('event_id', id)
   ]);
   const ev = must(evR), people = await withDerivedSex(sb, must(enR).filter((e) => e.attendance === 'join')), specials = must(spR);
-  if (awR.error) return [el('div', { class: 'row between' }, el('h2', {}, '賞・商品'), el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+  if (awR.error) return [el('div', { class: 'row between' }, el('h2', {}, '賞・商品')),
     el('div', { class: 'card' }, 'この機能を使うには、データベースの準備（SQL）が必要です。')];
   let awards = awR.data || [];
   const yen = (n) => Number(n).toLocaleString('ja-JP') + '円';
@@ -1326,8 +1328,7 @@ async function viewAwards(id) {
   draw();
   return [
     el('div', { class: 'row between' },
-      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '賞・商品'), el('div', { class: 'muted' }, ev.name)),
-      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '賞・商品'), el('div', { class: 'muted' }, ev.name))),
     el('div', { class: 'muted', style: 'margin:6px 0' }, '成績は「成績・順位」で入れます。ニアピン・ドラコンの受賞者は、その画面の入力が反映されます。'),
     root
   ];
@@ -1412,8 +1413,7 @@ async function viewCollect(id) {
   draw();
   return [
     el('div', { class: 'row between' },
-      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '集金チェック'), el('div', { class: 'muted' }, ev.name)),
-      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '集金チェック'), el('div', { class: 'muted' }, ev.name))),
     root
   ];
 }
@@ -1518,8 +1518,7 @@ async function viewSpecial(id) {
   draw();
   return [
     el('div', { class: 'row between' },
-      el('div', {}, el('h2', { style: 'margin-bottom:0' }, 'ニアピン・ドラコン'), el('div', { class: 'muted' }, ev.name)),
-      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, 'ニアピン・ドラコン'), el('div', { class: 'muted' }, ev.name))),
     root
   ];
 }
@@ -1985,14 +1984,13 @@ async function viewGroups(id) {
   }
 
   if (!d.slots.length) {
-    return [el('div', { class: 'row between' }, el('h2', {}, '組分け'), el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+    return [el('div', { class: 'row between' }, el('h2', {}, '組分け')),
       el('div', { class: 'card' }, 'スタート枠が未登録です。コンペ画面で、スタート枠を登録してください。')];
   }
   draw();
   return [
     el('div', { class: 'row between' },
-      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '組分け'), el('div', { class: 'muted' }, d.ev.name)),
-      el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
+      el('div', {}, el('h2', { style: 'margin-bottom:0' }, '組分け'), el('div', { class: 'muted' }, d.ev.name))),
     root
   ];
 }
@@ -2020,8 +2018,7 @@ async function viewPrint(id) {
         el('tbody', {}, rows)));
   };
   return [
-    el('div', { class: 'row between no-print' },
-      el('a', { class: 'btn sm', href: `#/event/${id}/groups` }, '← 組分けに戻る'),
+    el('div', { class: 'row no-print', style: 'justify-content:flex-end' },
       el('button', { class: 'btn sm pri', onclick: () => window.print() }, '印刷する')),
     el('div', { class: 'muted no-print' }, 'PDF保存するときは、印刷画面の「ヘッダーとフッター」はオフのままでOKです（自動で入りません）'),
     el('h2', {}, `${d.ev.name} 組合せ`),
