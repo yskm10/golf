@@ -263,6 +263,18 @@ function teeSelect(current) {
     Object.entries(TEE).map(([k, [l]]) => el('option', { value: k }, l)));
 }
 
+// 読み取りに使うAIモデルの切り替え（比較テスト用。ふだんは「標準」のまま）
+const MODEL_CHOICES = [['', '標準'], ['claude-haiku-4-5-20251001', 'Haiku（軽量・テスト用）']];
+function modelPicker() {
+  const sel = el('select', {}, ...MODEL_CHOICES.map(([v, t]) => el('option', { value: v }, t)));
+  try { sel.value = ls.get('golf_read_model') || ''; } catch (e) { /* ignore */ }
+  sel.addEventListener('change', () => { try { ls.set('golf_read_model', sel.value); } catch (e) { /* ignore */ } });
+  return el('details', { class: 'muted', style: 'margin-top:6px' }, el('summary', {}, '読み取りのテスト設定'),
+    el('label', {}, '読み取りに使うAI'), sel,
+    el('div', { class: 'muted' }, '精度を比べるときだけ変えます。ふだんは「標準」で使ってください。'));
+}
+const readModel = () => { try { return ls.get('golf_read_model') || undefined; } catch (e) { return undefined; } };
+const usageNote = (j) => (j && j.usage && j.usage.input != null ? `（${j.model.includes('haiku') ? 'Haiku' : '標準'}・入力${j.usage.input}・出力${j.usage.output}）` : '');
 async function fileToJpeg(file, max = 1600) {
   const url = URL.createObjectURL(file);
   try {
@@ -485,12 +497,12 @@ async function viewEventForm(id) {
       const r = await fetch(`${SB_URL}/functions/v1/read-booking`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
-        body: JSON.stringify({ images })
+        body: JSON.stringify({ images, model: readModel() })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
       applyBooking(j.data);
-      readMsg.textContent = '読み取りました。内容を確認して、違うところは直してください。';
+      readMsg.textContent = '読み取りました。内容を確認して、違うところは直してください。' + usageNote(j);
     } catch (e) {
       readMsg.textContent = '';
       throw e;
@@ -499,11 +511,30 @@ async function viewEventForm(id) {
       fileIn.value = '';
     }
   }));
+  const pasteIn = el('textarea', { rows: 5, placeholder: '予約確認メールや案内文をコピーして、ここに貼り付け' });
+  const pasteBtn = el('button', { class: 'btn block', onclick: () => guard(async () => {
+    const text = pasteIn.value.trim();
+    if (!text) return toast('文章を貼り付けてください');
+    pasteBtn.disabled = true; readBtn.disabled = true;
+    readMsg.textContent = '読み取り中…（10〜30秒ほどかかります）';
+    try {
+      const r = await fetch(`${SB_URL}/functions/v1/read-booking`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
+        body: JSON.stringify({ text, model: readModel() })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
+      applyBooking(j.data);
+      readMsg.textContent = '読み取りました。内容を確認して、違うところは直してください。' + usageNote(j);
+    } catch (e) { readMsg.textContent = ''; throw e; } finally { pasteBtn.disabled = false; readBtn.disabled = false; }
+  }) }, '📋 貼り付けた文章から読み取る');
   return [
     el('h2', {}, id ? 'コンペを編集' : '新しいコンペ'),
     el('div', { class: 'card' },
       !id && el('div', {}, readBtn, readMsg, slotInfo, fileIn,
-        el('p', { class: 'muted' }, '予約確認画面のスクショを何枚でも選べます（8枚まで）。読み取った内容は入力欄に入るだけで、保存は「保存」を押したときです。')),
+        el('p', { class: 'muted' }, '予約確認画面のスクショを何枚でも選べます（8枚まで）。読み取った内容は入力欄に入るだけで、保存は「保存」を押したときです。'),
+        el('label', {}, 'または、文章を貼り付けて読み取る'), pasteIn, el('p', {}, pasteBtn), modelPicker()),
       el('label', {}, 'コンペ名'), name,
       el('label', {}, '開催日'), date,
       el('label', {}, 'ゴルフ場'), course,
@@ -1034,12 +1065,12 @@ async function viewResults(id) {
       const images = await Promise.all(files.map((f) => fileToJpeg(f)));
       const r = await fetch(`${SB_URL}/functions/v1/read-results`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-team-token': state.token, apikey: SB_KEY },
-        body: JSON.stringify({ images })
+        body: JSON.stringify({ images, model: readModel() })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
       preview = (j.data.rows || []).map((row) => ({ row, entryId: match(row) || '' }));
-      msg.textContent = `${preview.length}人分を読み取りました。名前の対応を確認して「反映する」を押してください。`;
+      msg.textContent = `${preview.length}人分を読み取りました。名前の対応を確認して「反映する」を押してください。` + usageNote(j);
       draw();
     } catch (e) { msg.textContent = ''; throw e; } finally { readBtn.disabled = false; fileIn.value = ''; }
   }));
@@ -1102,7 +1133,8 @@ async function viewResults(id) {
       el('a', { class: 'btn sm', href: '#/event/' + id }, '← コンペに戻る')),
     el('div', { class: 'card' }, readBtn, msg, fileIn,
       el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、ティーが赤なら女、白・青・金・黒なら男として自動で扱います（変えたい人だけ選び直してください）。'),
-      el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す'))),
+      el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す')),
+      modelPicker()),
     root
   ];
 }

@@ -9,7 +9,9 @@ const CORS = {
 const DAILY_LIMIT = 30; // 1チームあたり、24時間に読み取れる回数
 const MAX_IMAGES = 8;
 const MAX_IMAGE_CHARS = 2_000_000; // 1枚あたりのbase64の長さ上限
-const MODEL = 'claude-sonnet-5-5';
+const DEFAULT_MODEL = Deno.env.get('READ_MODEL') || 'claude-sonnet-5-5';
+const ALLOWED_MODELS = ['claude-sonnet-5-5', 'claude-haiku-4-5-20251001']; // 画面からの比較テスト用に切り替えてよいモデル
+const MAX_TEXT_CHARS = 12000;
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -61,6 +63,7 @@ Deno.serve(async (req) => {
 
     // 3) 画像の検証
     const body = await req.json().catch(() => null);
+    const model: string = ALLOWED_MODELS.includes(body?.model) ? body.model : DEFAULT_MODEL;
     const images: string[] = Array.isArray(body?.images) ? body.images : [];
     if (images.length < 1 || images.length > MAX_IMAGES) return json({ error: 'bad_images' }, 400);
     const blocks: unknown[] = [];
@@ -72,7 +75,7 @@ Deno.serve(async (req) => {
     }
 
     // 4) 記録してから読み取る（失敗しても回数に含める）
-    await admin.from('read_log').insert({ team_id: team.id });
+    const { data: logRow } = await admin.from('read_log').insert({ team_id: team.id, kind: 'results', model, input_type: 'image' }).select('id').single();
     const prompt =
       `これはゴルフコンペの成績表（順位表）の写真（複数枚・順不同・重複あり）。表に書かれている内容だけを save_results に入れる。\n` +
       `- 推測しない。書かれていない項目は null。数字は読み取れたとおりに。\n` +
@@ -88,7 +91,7 @@ Deno.serve(async (req) => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         max_tokens: 8192,
         tools: [TOOL],
         tool_choice: { type: 'auto' },
@@ -106,7 +109,9 @@ Deno.serve(async (req) => {
       console.error('no_tool_use', JSON.stringify(out.content ?? []).slice(0, 300));
       return json({ error: 'ai_no_result' }, 502);
     }
-    return json({ ok: true, data: tool.input });
+    const usage = out.usage ?? {};
+    if (logRow?.id) await admin.from('read_log').update({ input_tokens: usage.input_tokens ?? null, output_tokens: usage.output_tokens ?? null }).eq('id', logRow.id);
+    return json({ ok: true, data: tool.input, model, usage: { input: usage.input_tokens ?? null, output: usage.output_tokens ?? null } });
   } catch (e) {
     console.error('read-results error', e);
     return json({ error: 'server_error' }, 500);

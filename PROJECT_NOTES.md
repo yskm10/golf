@@ -37,7 +37,7 @@
 - アクセス制御：RLS。リクエストヘッダー `x-team-token` → `current_team_id()`（security definer）でチームを判定。
 - 出欠フォームは security definer のRPC：`form_get`（名簿は返さない）、`form_submit`（名前一致で本人登録／なければ承認待ち）。承認は `approve_entry`。
 - トリガー：`compose_name()`（姓名から name を「姓 名」に組み立て）、`set_updated_at()`。
-- Edge Function：`read-booking`（予約スクショ）、`read-results`（成績表の写真）。トークンで幹事を確認、1チーム24時間30回まで（`read_log`）。モデル `claude-sonnet-5-5`、`tool_choice` は auto（強制は未対応）。シークレット `ANTHROPIC_API_KEY`（Supabase側に設定済み）。
+- Edge Function：`read-booking`（予約スクショ）、`read-results`（成績表の写真）。トークンで幹事を確認、1チーム24時間30回まで（`read_log`）。既定モデルは `claude-sonnet-5-5`（Supabaseのシークレット `READ_MODEL` で既定を変えられる）。画面の「読み取りのテスト設定」から、Haiku（`claude-haiku-4-5-20251001`）に切り替えて比較できる。`read_log` に kind／model／input_tokens／output_tokens／input_type を記録（実費の見積り用）。`read-booking` は画像のほか、貼り付けた文章（`text`）も読める。`tool_choice` は auto（強制は未対応）。シークレット `ANTHROPIC_API_KEY`（Supabase側に設定済み）。
 - SQLの履歴は `supabase/*.sql`（`form_noplayers.sql`、`group_rules.sql`、`special_course.sql`、`collect.sql`、`results_awards.sql`、`prize_budget.sql`、`fix_duplicates.sql`）。それ以前（姓名分割・よみ・料金など）は SQL Editor で実行済み。
 
 ## 作業の進め方（重要）
