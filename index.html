@@ -1646,15 +1646,14 @@ async function viewGroups(id) {
   let d = await loadGroupData(id);
   const sb = state.sb;
   const saved = (() => { try { return JSON.parse(ls.get('golf_auto_opts') || '{}'); } catch (e) { return {}; } })();
-  const optAff = el('select', { value: saved.aff || 'normal' },
-    el('option', { value: 'strong' }, '強く分ける'), el('option', { value: 'normal' }, 'ふつう'),
-    el('option', { value: 'weak' }, '弱め'), el('option', { value: 'off' }, '考えない'));
-  const optScore = el('select', { value: saved.score || 'normal' },
-    el('option', { value: 'strong' }, '強くそろえる'), el('option', { value: 'normal' }, 'ふつう'), el('option', { value: 'weak' }, '弱め'));
-  const optSex = el('select', {},
-    el('option', { value: 'strong' }, '強くそろえる'), el('option', { value: 'normal' }, 'ふつう'),
-    el('option', { value: 'weak' }, '弱め'), el('option', { value: 'off' }, '考えない'));
-  optSex.value = saved.sex || 'normal';
+  const mkOpt = (items, cur, def) => {
+    const sel = el('select', {}, ...items.map(([v, t]) => el('option', { value: v }, t)));
+    sel.value = items.some(([v]) => v === cur) ? cur : def;
+    return sel;
+  };
+  const optAff = mkOpt([['split', 'わける'], ['together', '揃える'], ['off', '考えない']], saved.aff, 'split');
+  const optScore = mkOpt([['even', '揃える'], ['off', '揃えない']], saved.score, 'even');
+  const optSex = mkOpt([['even', '均等にばらける'], ['off', '考えない']], saved.sex, 'even');
   let selected = null;
   const root = el('div', {});
   let kindVal = 'together';
@@ -1804,7 +1803,7 @@ async function viewGroups(id) {
   });
 
   const runAuto = () => guard(async () => {
-    const W = { aff: { strong: 3, normal: 1, weak: 0.4, off: 0 }, score: { strong: 2, normal: 1, weak: 0.3 }, sex: { strong: 3, normal: 1.5, weak: 0.5, off: 0 } };
+    const W = { aff: { split: 1.5, together: -1.5, off: 0 }, score: { even: 1, off: 0 }, sex: { even: 1.5, off: 0 } };
     ls.set('golf_auto_opts', JSON.stringify({ aff: optAff.value, score: optScore.value, sex: optSex.value }));
     const lockedIds = new Set(d.slots.filter((g) => g.locked).map((g) => g.id));
     const lockedEntries = new Set(d.members.filter((m) => lockedIds.has(m.group_id)).map((m) => m.entry_id));
@@ -1853,10 +1852,10 @@ async function viewGroups(id) {
       el('strong', {}, '自動で組分け'),
       el('p', { class: 'muted' }, 'ロックした組はそのまま、残りの人を、平均スコア・所属・男女比がそろうように振り分けます（男女はティーの色から自動で判定。赤＝女、他＝男）。人数が4の倍数でないときは3人組にします。'),
       el('div', { class: 'row', style: 'flex-wrap:nowrap' },
-        el('div', { class: 'grow' }, el('label', {}, '同じ所属'), optAff),
-        el('div', { class: 'grow' }, el('label', {}, '組の強さ'), optScore)),
+        el('div', { class: 'grow' }, el('label', {}, '同じ所属は'), optAff),
+        el('div', { class: 'grow' }, el('label', {}, '組の強さは'), optScore)),
       el('div', { class: 'row', style: 'flex-wrap:nowrap' },
-        el('div', { class: 'grow' }, el('label', {}, '男女のばらけ'), optSex),
+        el('div', { class: 'grow' }, el('label', {}, '男女のばらけは'), optSex),
         el('div', { class: 'grow' })),
       el('p', {}, el('button', { class: 'btn pri block', onclick: runAuto }, '自動で組分けする')),
       el('div', { class: 'row' },
