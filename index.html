@@ -387,6 +387,7 @@ async function routeAdmin() {
   else if (a === 'event' && c === 'collect') view = () => viewCollect(b);
   else if (a === 'event' && c === 'results') view = () => viewResults(b);
   else if (a === 'event' && c === 'awards') view = () => viewAwards(b);
+  else if (a === 'event' && c === 'share') view = () => viewShare(b);
   else if (a === 'event' && b) view = () => viewEvent(b);
   else if (a === 'players' && b === 'import') { active = 'players'; view = viewImport; }
   else if (a === 'players') { active = 'players'; view = viewPlayers; }
@@ -867,6 +868,7 @@ async function viewEvent(id) {
     el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/collect` }, '💴 集金チェック'),
     el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/results` }, '📊 成績・順位'),
     el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/awards` }, '🎁 賞・商品'),
+    el('a', { class: 'btn block', style: 'margin-top:8px', href: `#/event/${id}/share` }, '📨 結果をLINEで送る'),
     infoCard,
     slotsCard,
     el('div', { class: 'card' },
@@ -1048,6 +1050,186 @@ async function withDerivedSex(sb, entries) {
   const pBy = new Map(pl.map((p) => [p.id, p]));
   for (const e of entries) e._dsex = sexFromTee(e.tee || (pBy.get(e.player_id) || {}).tee || null);
   return entries;
+}
+
+/* ====== 結果をLINEで送る ====== */
+const SHARE_FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP","Yu Gothic",Meiryo,sans-serif';
+function cvFit(ctx, text, maxW, size, weight) {
+  let s = size;
+  ctx.font = `${weight} ${s}px ${SHARE_FONT}`;
+  while (ctx.measureText(text).width > maxW && s > 14) { s -= 1; ctx.font = `${weight} ${s}px ${SHARE_FONT}`; }
+  return s;
+}
+function cvHeader(ctx, W, title, sub1, sub2) {
+  ctx.fillStyle = '#2e7d32'; ctx.fillRect(0, 0, W, 200);
+  ctx.fillStyle = '#fff'; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  cvFit(ctx, title, W - 80, 44, '700'); ctx.fillText(title, 40, 82);
+  ctx.font = `400 28px ${SHARE_FONT}`; ctx.fillText(sub1, 40, 130);
+  ctx.fillStyle = '#c8e6c9'; ctx.font = `700 30px ${SHARE_FONT}`; ctx.fillText(sub2, 40, 175);
+}
+const cvToBlob = (c) => new Promise((res) => c.toBlob(res, 'image/png'));
+async function drawRankImages(ev, rows, per = 30) {
+  const W = 900, out = [];
+  const pages = Math.max(1, Math.ceil(rows.length / per));
+  for (let p = 0; p < pages; p++) {
+    const part = rows.slice(p * per, (p + 1) * per);
+    const H = 200 + 56 + part.length * 60 + 70;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+    const date = ev.event_date ? fmtDate(ev.event_date) : '';
+    cvHeader(ctx, W, ev.name, [date, ev.course_name].filter(Boolean).join('　'), '成績表' + (pages > 1 ? `（${p + 1}/${pages}）` : ''));
+    ctx.fillStyle = '#e8f5e9'; ctx.fillRect(0, 200, W, 56);
+    ctx.fillStyle = '#2e7d32'; ctx.font = `700 26px ${SHARE_FONT}`; ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center'; ctx.fillText('順位', 90, 229);
+    ctx.textAlign = 'left'; ctx.fillText('氏名', 170, 229);
+    ctx.textAlign = 'right'; ctx.fillText('グロス', 700, 229); ctx.fillText('ネット', 860, 229);
+    part.forEach((r, i) => {
+      const y = 256 + i * 60;
+      if (i % 2) { ctx.fillStyle = '#f6f8f7'; ctx.fillRect(0, y, W, 60); }
+      const mid = y + 30;
+      const medal = { 1: '#f9a825', 2: '#90a4ae', 3: '#bf7b4a' }[r.rank];
+      if (medal) { ctx.fillStyle = medal; ctx.beginPath(); ctx.arc(90, mid, 22, 0, Math.PI * 2); ctx.fill(); }
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      ctx.fillStyle = medal ? '#fff' : '#1d2327'; ctx.font = `700 28px ${SHARE_FONT}`;
+      ctx.fillText(r.rank == null ? '-' : String(r.rank), 90, mid + 1);
+      ctx.textAlign = 'left'; ctx.fillStyle = '#1d2327';
+      cvFit(ctx, r.name, 480, 30, '600'); ctx.fillText(r.name, 170, mid + 1);
+      ctx.textAlign = 'right'; ctx.font = `400 30px ${SHARE_FONT}`; ctx.fillStyle = '#1d2327';
+      ctx.fillText(r.gross == null ? '-' : String(r.gross), 700, mid + 1);
+      ctx.font = `700 30px ${SHARE_FONT}`; ctx.fillText(r.net == null ? '-' : Number(r.net).toFixed(1), 860, mid + 1);
+    });
+    ctx.fillStyle = '#9aa5ab'; ctx.font = `400 22px ${SHARE_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('幹事キャディ', W / 2, H - 34);
+    out.push(await cvToBlob(c));
+  }
+  return out;
+}
+async function drawAwardImage(ev, items) {
+  const W = 900, rowH = 110;
+  const H = 200 + 30 + Math.max(1, items.length) * rowH + 80;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  const date = ev.event_date ? fmtDate(ev.event_date) : '';
+  cvHeader(ctx, W, ev.name, [date, ev.course_name].filter(Boolean).join('　'), '🏆 受賞者発表');
+  items.forEach((it, i) => {
+    const y = 230 + i * rowH;
+    ctx.fillStyle = i % 2 ? '#f6f8f7' : '#fff'; ctx.fillRect(0, y, W, rowH);
+    ctx.fillStyle = '#2e7d32'; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    cvFit(ctx, it.title, 520, 28, '700'); ctx.fillText(it.title, 40, y + 40);
+    ctx.fillStyle = '#1d2327';
+    cvFit(ctx, it.winner + ' さん', 820, 42, '700'); ctx.fillText(it.winner + ' さん', 40, y + 92);
+    if (it.prize) {
+      ctx.fillStyle = '#667078'; ctx.textAlign = 'right';
+      cvFit(ctx, it.prize, 320, 24, '400'); ctx.fillText(it.prize, W - 40, y + 40);
+    }
+  });
+  if (!items.length) { ctx.fillStyle = '#667078'; ctx.font = `400 28px ${SHARE_FONT}`; ctx.textAlign = 'center'; ctx.fillText('受賞者がまだ決まっていません', W / 2, 300); }
+  ctx.fillStyle = '#9aa5ab'; ctx.font = `400 22px ${SHARE_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('幹事キャディ', W / 2, H - 36);
+  return cvToBlob(c);
+}
+
+async function viewShare(id) {
+  const sb = state.sb;
+  const [evR, enR, awR] = await Promise.all([
+    sb.from('events').select('*').eq('id', id).single(),
+    sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved'),
+    sb.from('awards').select('*').eq('event_id', id)
+  ]);
+  const ev = must(evR);
+  const people = must(enR).filter((e) => e.attendance === 'join');
+  const awards = (awR.error ? [] : (awR.data || [])).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
+  const nameOf = (eid) => { const e = people.find((x) => x.id === eid); return e ? e.name : ''; };
+
+  // 順位：成績表の順位があればそれを使い、なければネットから（同スコアは同順位、次は順位が飛ぶ）
+  const byNet = people.filter((e) => e.net != null).sort((a, b) => a.net - b.net);
+  const calc = new Map();
+  byNet.forEach((e, i) => calc.set(e.id, i > 0 && byNet[i - 1].net === e.net ? calc.get(byNet[i - 1].id) : i + 1));
+  const rows = people.filter((e) => e.net != null || e.gross != null)
+    .map((e) => ({ name: e.name, gross: e.gross, net: e.net, rank: e.result_rank ?? calc.get(e.id) ?? null }))
+    .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999) || (a.net ?? 999) - (b.net ?? 999));
+  const winners = awards.filter((a) => a.winner_entry_id && nameOf(a.winner_entry_id))
+    .map((a) => ({ title: a.name, winner: nameOf(a.winner_entry_id), prize: a.prize || '' }));
+
+  const date = ev.event_date ? fmtDate(ev.event_date) : '';
+  const lines = [`【${ev.name}】結果発表`, [date, ev.course_name].filter(Boolean).join('　'), `参加${people.length}名`, ''];
+  if (winners.length) {
+    lines.push('■ 受賞者');
+    for (const w of winners) lines.push(`${w.title}：${w.winner}さん` + (w.prize ? `（${w.prize}）` : ''));
+    lines.push('');
+  }
+  lines.push('ご参加ありがとうございました！');
+  const textIn = el('textarea', { rows: 12 }); textIn.value = lines.join('\n');
+
+  const imgs = []; // {label, file, url, on}
+  const photos = [];
+  const mkFile = (blob, name) => new File([blob], name, { type: blob.type || 'image/png' });
+  const imgBox = el('div', {});
+  const drawList = () => {
+    const nodes = [];
+    for (const it of [...imgs, ...photos]) {
+      nodes.push(el('div', { class: 'card', style: 'padding:10px' },
+        el('label', { class: 'row', style: 'gap:8px;align-items:center;margin:0' },
+          el('input', { type: 'checkbox', checked: it.on, style: 'width:auto', onchange: (e) => { it.on = e.target.checked; } }),
+          el('strong', {}, it.label),
+          it.remove ? el('button', { class: 'btn sm bad', style: 'margin-left:auto', onclick: (e) => { e.preventDefault(); photos.splice(photos.indexOf(it), 1); drawList(); } }, '外す') : null),
+        el('img', { src: it.url, style: 'width:100%;margin-top:8px;border:1px solid var(--bd);border-radius:6px' })));
+    }
+    imgBox.replaceChildren(...nodes);
+  };
+  const msg = el('div', { class: 'muted' }, '画像を作っています…');
+
+  const shareImgs = () => guard(async () => {
+    const files = [...imgs, ...photos].filter((x) => x.on).map((x) => x.file);
+    if (!files.length) return toast('送る画像にチェックを入れてください');
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try { await navigator.share({ files }); } catch (e) { if (e && e.name !== 'AbortError') throw e; }
+    } else {
+      toast('この端末では画像を直接送れません。画像を長押しして保存してください');
+    }
+  });
+  const photoIn = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+  photoIn.addEventListener('change', () => guard(async () => {
+    for (const f of [...photoIn.files]) {
+      const dataUrl = await fileToJpeg(f, 2000);
+      const blob = await (await fetch(dataUrl)).blob();
+      photos.push({ label: '記念写真', file: new File([blob], `photo${photos.length + 1}.jpg`, { type: 'image/jpeg' }), url: URL.createObjectURL(blob), on: true, remove: true });
+    }
+    photoIn.value = ''; drawList();
+  }));
+
+  (async () => {
+    try {
+      const aw = await drawAwardImage(ev, winners);
+      imgs.push({ label: '受賞者発表', file: mkFile(aw, 'awards.png'), url: URL.createObjectURL(aw), on: true });
+      const rk = await drawRankImages(ev, rows);
+      rk.forEach((b, i) => imgs.push({ label: rk.length > 1 ? `成績表（${i + 1}/${rk.length}）` : '成績表', file: mkFile(b, `results${i + 1}.png`), url: URL.createObjectURL(b), on: true }));
+      msg.textContent = rows.length ? '' : '成績がまだ入っていません。「成績・順位」で入力すると、成績表の画像が作れます。';
+      drawList();
+    } catch (e) { console.error(e); msg.textContent = '画像を作れませんでした'; }
+  })();
+
+  return [
+    el('div', {}, el('h2', { style: 'margin-bottom:0' }, '結果をLINEで送る'), el('div', { class: 'muted' }, ev.name)),
+    el('div', { class: 'card' },
+      el('strong', {}, '① 文章'),
+      el('p', { class: 'muted' }, '受賞者を書いた文章です。直してから送れます。'),
+      textIn,
+      el('div', { class: 'row', style: 'margin-top:8px' },
+        el('button', { class: 'btn sm pri', onclick: () => copyText(textIn.value) }, '文章をコピー'),
+        el('a', { class: 'btn sm', href: 'https://line.me/R/msg/text/?' + encodeURIComponent(textIn.value), onclick: (e) => { e.currentTarget.href = 'https://line.me/R/msg/text/?' + encodeURIComponent(textIn.value); } }, 'LINEで文章を送る'))),
+    el('div', { class: 'card' },
+      el('strong', {}, '② 画像'),
+      el('p', { class: 'muted' }, '送る画像にチェックを入れて「LINEに送る」を押すと、共有画面からLINEのグループを選べます。'),
+      msg, imgBox,
+      photoIn,
+      el('div', { class: 'row', style: 'margin-top:10px' },
+        el('button', { class: 'btn', onclick: () => photoIn.click() }, '📷 記念写真を足す'),
+        el('button', { class: 'btn pri grow', onclick: shareImgs }, '選んだ画像をLINEに送る'))),
+    el('p', { class: 'muted' }, 'LINEに画像と一緒に文章を送ると、文章が消えることがあります。文章は①で別に送ってください。写真はアプリに保存されません。')
+  ];
 }
 
 /* ====== 成績・順位 ====== */
