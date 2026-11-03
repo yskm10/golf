@@ -1319,7 +1319,10 @@ async function viewResults(id) {
         el('strong', {}, e.name),
         el('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px' },
           numField('順位', e, 'result_rank'), numField('グロス', e, 'gross'), numField('ネット', e, 'net', '0.1'),
-          el('div', {}, el('small', { class: 'muted' }, '性別'), sex))));
+          el('div', {}, el('small', { class: 'muted' }, '性別'), sex)),
+        e.gross != null && e.net != null && Number(e.net) > Number(e.gross)
+          ? el('div', { style: 'color:#c62828;font-size:13px;margin-top:6px' }, '⚠ ネットがグロスより大きくなっています。グロスの読み取りミスかもしれません（成績表で確認してください）')
+          : null));
     }
     if (!people.length) nodes.push(el('div', { class: 'card muted' }, '参加者がいません'));
     root.replaceChildren(...nodes);
