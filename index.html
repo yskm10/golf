@@ -966,6 +966,7 @@ async function viewPlayerForm(id) {
   const avg = el('input', { type: 'number', inputmode: 'numeric', value: p.avg_score ?? '', placeholder: '例：98' });
   const aff = el('input', { value: p.affiliation || '', placeholder: '会社名など' });
   const tee = teeSelect(p.tee);
+  const birth = el('input', { type: 'number', inputmode: 'numeric', value: p.birth_year ?? '', placeholder: '例：1975（同スコアの順位づけに使います）' });
   const note = el('textarea', { value: p.note || '', placeholder: '幹事用メモ（本人には見えません）' });
   return [
     el('h2', {}, id ? '名簿を編集' : '名簿に追加'),
@@ -974,6 +975,7 @@ async function viewPlayerForm(id) {
       el('label', {}, '平均スコア（不明なら空欄）'), avg,
       el('label', {}, '所属'), aff,
       el('label', {}, 'ティー'), tee,
+      el('label', {}, '生まれ年（任意）'), birth,
       el('label', {}, 'メモ'), note),
     el('button', {
       class: 'btn pri block', onclick: () => guard(async () => {
@@ -983,6 +985,7 @@ async function viewPlayerForm(id) {
           name: joinName(nm.l.value, nm.f.value),
           last_kana: kanaVal(nm.lk.value) || null, first_kana: kanaVal(nm.fk.value),
           avg_score: scoreOrNull(avg.value),
+          birth_year: (() => { const y = numOrNull(birth.value); return y != null && y >= 1900 && y <= 2100 ? y : null; })(),
           affiliation: strOrNull(aff.value), tee: tee.value || null, note: strOrNull(note.value)
         };
         if (id) must(await state.sb.from('players').update(payload).eq('id', id));
@@ -1046,10 +1049,87 @@ async function viewImport() {
 // ティーの色から性別を推定：赤＝女、白・青・金・黒＝男、未設定＝不明（成績画面で手で変えられる）
 const sexFromTee = (tee) => (tee === 'red' ? 'F' : (tee ? 'M' : null));
 async function withDerivedSex(sb, entries) {
-  const pl = must(await sb.from('players').select('id,tee'));
+  const pl = must(await sb.from('players').select('id,tee,birth_year'));
   const pBy = new Map(pl.map((p) => [p.id, p]));
-  for (const e of entries) e._dsex = sexFromTee(e.tee || (pBy.get(e.player_id) || {}).tee || null);
+  for (const e of entries) {
+    const p = pBy.get(e.player_id) || {};
+    e._dsex = sexFromTee(e.tee || p.tee || null);
+    e._by = e.birth_year ?? p.birth_year ?? null; // 生まれ年（本人の入力が名簿より優先）
+  }
   return entries;
+}
+
+/* ====== 同スコアのときの順位の決め方 ====== */
+const TB_ALL = ['gross', 'sex', 'age', 'countback'];
+const TB_LABEL = { gross: 'グロス', sex: '性別', age: '年齢', countback: 'カウントバック' };
+function tbOrder(ev, key) {
+  const allowed = key === 'net' ? TB_ALL : TB_ALL.filter((k) => k !== 'gross');
+  const raw = key === 'net' ? (ev.tiebreak_net ?? 'gross,sex,age,countback') : (ev.tiebreak_gross ?? 'sex,age,countback');
+  return String(raw).split(',').filter((k, i, a) => allowed.includes(k) && a.indexOf(k) === i);
+}
+// 同スコアの2人を、優先順位の順に比べる（負＝aが上）。データがない項目は飛ばす
+function tieCmp(a, b, order, ev) {
+  for (const k of order) {
+    if (k === 'gross') {
+      if (a.gross != null && b.gross != null && Number(a.gross) !== Number(b.gross)) return Number(a.gross) - Number(b.gross);
+    } else if (k === 'sex') {
+      const sa = a.sex || a._dsex, sb2 = b.sex || b._dsex;
+      if (sa && sb2 && sa !== sb2) return sa === (ev.tb_sex || 'F') ? -1 : 1;
+    } else if (k === 'age') {
+      const ya = a._by ?? a.birth_year ?? null, yb = b._by ?? b.birth_year ?? null;
+      if (ya != null && yb != null && ya !== yb) return ev.tb_age === 'young' ? yb - ya : ya - yb;
+    } else if (k === 'countback') {
+      if (a.score_in != null && b.score_in != null && Number(a.score_in) !== Number(b.score_in)) return Number(a.score_in) - Number(b.score_in);
+    }
+  }
+  return 0;
+}
+// key = 'net' | 'gross'。小さい順。まだ決まらない同士は同順位（次の人は順位が飛ぶ）
+function rankBy(list, key, ev) {
+  const order = tbOrder(ev, key);
+  const l = list.filter((e) => e[key] != null);
+  const cmp = (a, b) => (Number(a[key]) - Number(b[key])) || tieCmp(a, b, order, ev);
+  const m = new Map();
+  for (const e of l) m.set(e.id, 1 + l.filter((x) => cmp(x, e) < 0).length);
+  return m;
+}
+function tiebreakCard(sb, ev, onSave) {
+  const mk = (key) => {
+    const allowed = key === 'net' ? TB_ALL : TB_ALL.filter((k) => k !== 'gross');
+    const cur = tbOrder(ev, key);
+    const sels = allowed.map((_, i) => {
+      const s = el('select', {}, el('option', { value: '' }, '（なし）'), ...allowed.map((k) => el('option', { value: k }, TB_LABEL[k])));
+      s.value = cur[i] || '';
+      return s;
+    });
+    const save = () => guard(async () => {
+      const col = key === 'net' ? 'tiebreak_net' : 'tiebreak_gross';
+      const v = [...new Set(sels.map((x) => x.value).filter(Boolean))].join(',');
+      must(await sb.from('events').update({ [col]: v }).eq('id', ev.id)); ev[col] = v;
+      if (onSave) onSave();
+    });
+    sels.forEach((x) => x.addEventListener('change', save));
+    return el('div', { style: 'display:grid;grid-template-columns:repeat(' + allowed.length + ',1fr);gap:6px' },
+      sels.map((x, i) => el('div', {}, el('small', { class: 'muted' }, `${i + 1}番目`), x)));
+  };
+  const dir = (col, items, def) => {
+    const s = el('select', {}, ...items.map(([v, t]) => el('option', { value: v }, t)));
+    s.value = ev[col] || def;
+    s.addEventListener('change', () => guard(async () => {
+      must(await sb.from('events').update({ [col]: s.value }).eq('id', ev.id)); ev[col] = s.value;
+      if (onSave) onSave();
+    }));
+    return s;
+  };
+  return el('details', { class: 'card' },
+    el('summary', { style: 'font-weight:700' }, '同スコアのときの順位の決め方'),
+    el('p', { class: 'muted' }, '同じスコアの人は、上の番号から順に比べて順位を付けます。データがない人は、その項目を飛ばして次を見ます。それでも決まらない人は同順位です。'),
+    el('label', {}, 'ネットの順位が同じとき'), mk('net'),
+    el('label', {}, 'グロスの順位が同じとき'), mk('gross'),
+    el('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px' },
+      el('div', {}, el('label', {}, '性別は'), dir('tb_sex', [['F', '女性が上'], ['M', '男性が上']], 'F')),
+      el('div', {}, el('label', {}, '年齢は'), dir('tb_age', [['old', '年長が上'], ['young', '若い人が上']], 'old'))),
+    el('p', { class: 'muted' }, '年齢は「成績・順位」か名簿で入れる生まれ年、カウントバックは「成績・順位」で入れる後半9ホールのスコア（小さい人が上）で比べます。成績表の写真に順位が書かれている場合は、その順位が先に使われます。「ネットから順位を計算し直す」を押すと、この決め方で付け直します。'));
 }
 
 /* ====== 結果をLINEで送る ====== */
@@ -1139,14 +1219,12 @@ async function viewShare(id) {
     sb.from('awards').select('*').eq('event_id', id)
   ]);
   const ev = must(evR);
-  const people = must(enR).filter((e) => e.attendance === 'join');
+  const people = await withDerivedSex(sb, must(enR).filter((e) => e.attendance === 'join'));
   const awards = (awR.error ? [] : (awR.data || [])).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
   const nameOf = (eid) => { const e = people.find((x) => x.id === eid); return e ? e.name : ''; };
 
   // 順位：成績表の順位があればそれを使い、なければネットから（同スコアは同順位、次は順位が飛ぶ）
-  const byNet = people.filter((e) => e.net != null).sort((a, b) => a.net - b.net);
-  const calc = new Map();
-  byNet.forEach((e, i) => calc.set(e.id, i > 0 && byNet[i - 1].net === e.net ? calc.get(byNet[i - 1].id) : i + 1));
+  const calc = rankBy(people, 'net', ev);
   const rows = people.filter((e) => e.net != null || e.gross != null)
     .map((e) => ({ name: e.name, gross: e.gross, net: e.net, rank: e.result_rank ?? calc.get(e.id) ?? null }))
     .sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999) || (a.net ?? 999) - (b.net ?? 999));
@@ -1236,13 +1314,14 @@ async function viewShare(id) {
 async function viewResults(id) {
   const sb = state.sb;
   const [evR, enR] = await Promise.all([
-    sb.from('events').select('id,name,event_date,course_name').eq('id', id).single(),
+    sb.from('events').select('*').eq('id', id).single(),
     sb.from('entries').select('*').eq('event_id', id).eq('approval', 'approved')
   ]);
   const ev = must(evR);
   const people = await withDerivedSex(sb, must(enR).filter((e) => e.attendance === 'join'));
   const root = el('div', {});
   let preview = null;
+  const tbCard = tiebreakCard(sb, ev, null);
   const order = () => [...people].sort((a, b) => (a.result_rank ?? 999) - (b.result_rank ?? 999)
     || (a.net ?? 999) - (b.net ?? 999) || String(a.last_kana || a.name).localeCompare(String(b.last_kana || b.name), 'ja'));
   const save = (e, patch) => guard(async () => { must(await sb.from('entries').update(patch).eq('id', e.id)); Object.assign(e, patch); });
@@ -1283,16 +1362,15 @@ async function viewResults(id) {
     preview = null; msg.textContent = ''; draw();
   });
   const autoRank = () => guard(async () => {
-    const l = people.filter((e) => e.net != null).sort((a, b) => a.net - b.net);
-    await Promise.all(l.map(async (e, i) => {
-      const r = i > 0 && l[i - 1].net === e.net ? l[i - 1]._r : i + 1;
-      e._r = r;
+    const rk = rankBy(people, 'net', ev);
+    await Promise.all(people.filter((e) => e.net != null).map(async (e) => {
+      const r = rk.get(e.id);
       must(await sb.from('entries').update({ result_rank: r }).eq('id', e.id)); e.result_rank = r;
     }));
-    toast('ネットの小さい順に、順位を付けました（同スコアは同順位）'); draw();
+    toast('ネットの小さい順に、順位を付けました（同スコアは「同スコアのときの順位の決め方」の設定どおり）'); draw();
   });
-  const numField = (label, e, key, step) => {
-    const inp = el('input', { type: 'number', inputmode: 'decimal', step: step || '1', value: e[key] ?? '', style: 'width:100%' });
+  const numField = (label, e, key, step, ph) => {
+    const inp = el('input', { type: 'number', inputmode: 'decimal', step: step || '1', value: e[key] ?? '', placeholder: ph || '', style: 'width:100%' });
     inp.addEventListener('change', () => { const v = inp.value === '' ? null : Number(inp.value); save(e, { [key]: Number.isFinite(v) ? v : null }); });
     return el('div', {}, el('small', { class: 'muted' }, label), inp);
   };
@@ -1319,8 +1397,12 @@ async function viewResults(id) {
         el('strong', {}, e.name),
         el('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px' },
           numField('順位', e, 'result_rank'), numField('グロス', e, 'gross'), numField('ネット', e, 'net', '0.1'),
-          el('div', {}, el('small', { class: 'muted' }, '性別'), sex))));
+          el('div', {}, el('small', { class: 'muted' }, '性別'), sex)),
+        el('div', { style: 'display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:6px' },
+          numField('後半9ホール（カウントバック用）', e, 'score_in'),
+          numField('生まれ年（年齢用）', e, 'birth_year', '1', e._by != null ? `名簿:${e._by}` : '例：1975'))));
     }
+    nodes.splice(preview ? 1 : 0, 0, tbCard);
     if (!people.length) nodes.push(el('div', { class: 'card muted' }, '参加者がいません'));
     root.replaceChildren(...nodes);
   }
@@ -1358,6 +1440,7 @@ async function viewAwards(id) {
     ev.prize_budget = v; draw();
   }));
   const sumBox = el('div', {});
+  const tbCard = tiebreakCard(sb, ev, () => draw());
   const KIND = { nearpin: 'ニアピン', drive: 'ドラコン' };
   const spTitle = (r) => `${r.course ? r.course + ' ' : ''}${KIND[r.kind]} ${r.hole_no ? r.hole_no + '番' : '未定'}`;
   const nameOf = (eid) => { const e = people.find((x) => x.id === eid); return e ? e.name : ''; };
@@ -1369,15 +1452,16 @@ async function viewAwards(id) {
 
   // 自動計算
   const netRank = () => {
-    const m = new Map(); const l = people.filter((e) => e.net != null).sort((a, b) => a.net - b.net);
-    l.forEach((e, i) => m.set(e.id, e.result_rank ?? (i > 0 && l[i - 1].net === e.net ? m.get(l[i - 1].id) : i + 1)));
+    const r = rankBy(people, 'net', ev); const m = new Map();
+    for (const e of people) if (e.net != null) m.set(e.id, e.result_rank ?? r.get(e.id));
     return m;
   };
   const candidates = (a) => {
     if (a.rule === 'net_rank') { const m = netRank(); return people.filter((e) => m.get(e.id) === (a.rank_no || 1)).map((e) => e.id); }
     if (a.rule === 'gross_rank') {
       const l = people.filter((e) => e.gross != null && (!a.sex || (e.sex || e._dsex) === a.sex));
-      return l.filter((e) => 1 + l.filter((x) => x.gross < e.gross).length === (a.rank_no || 1)).map((e) => e.id);
+      const gr = rankBy(l, 'gross', ev);
+      return l.filter((e) => gr.get(e.id) === (a.rank_no || 1)).map((e) => e.id);
     }
     if (a.rule === 'booby') {
       const l = people.filter((e) => e.net != null).sort((x, y) => y.net - x.net);
@@ -1494,6 +1578,7 @@ async function viewAwards(id) {
     });
     root.replaceChildren(
       sumBox,
+      tbCard,
       !awards.length ? el('div', { class: 'card' }, el('p', {}, 'まだ賞がありません。ひな形から始めると楽です。'), el('button', { class: 'btn pri block', onclick: preset }, '優勝・準優勝・3位・ベスグロ・ブービー・ニアピン/ドラコンを入れる')) : null,
       ...cards,
       el('div', { class: 'card' }, el('strong', {}, '賞を追加'),
