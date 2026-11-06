@@ -180,6 +180,19 @@ function teeDot(k) {
   if (!k || !TEE[k]) return null;
   return el('span', { class: 'dot', title: TEE[k][0], style: 'background:' + TEE[k][1] });
 }
+// 性別の印：女＝赤、男＝白（これまでのティーの色と同じ見た目）
+function sexDot(sx) {
+  if (sx !== 'M' && sx !== 'F') return null;
+  return el('span', { class: 'dot', title: sx === 'F' ? '女性' : '男性', style: 'background:' + (sx === 'F' ? '#d32f2f' : '#ffffff') });
+}
+function sexFromText(s) {
+  if (!s) return null;
+  const t = String(s).trim().toLowerCase();
+  if (['男', '男性', 'm', 'male'].includes(t)) return 'M';
+  if (['女', '女性', 'f', 'female'].includes(t)) return 'F';
+  const k = teeFromText(s); // 昔の「ティーの色」の列にも対応（赤＝女、他＝男）
+  return k ? (k === 'red' ? 'F' : 'M') : null;
+}
 function fmtDate(s) {
   if (!s) return '日付未定';
   const [y, m, d] = s.split('-').map(Number);
@@ -639,7 +652,7 @@ async function viewEvent(id) {
   const pById = new Map(players.map((p) => [p.id, p]));
   const eff = (e) => {
     const p = pById.get(e.player_id) || {};
-    return { aff: e.affiliation ?? p.affiliation, avg: e.avg_score ?? p.avg_score, tee: e.tee ?? p.tee };
+    return { aff: e.affiliation ?? p.affiliation, avg: e.avg_score ?? p.avg_score, sex: e.sex ?? p.sex ?? sexFromTee(e.tee ?? p.tee) };
   };
   const approved = entries.filter((e) => e.approval === 'approved');
   const pending = entries.filter((e) => e.approval === 'pending');
@@ -683,7 +696,7 @@ async function viewEvent(id) {
     const f = eff(e);
     return el('div', { class: 'card' },
       el('div', { class: 'row between' },
-        el('div', {}, el('strong', {}, e.name), ' ', teeDot(f.tee), ' ',
+        el('div', {}, el('strong', {}, e.name), ' ', sexDot(f.sex), ' ',
           e.source === 'form' && el('span', { class: 'badge' }, '本人回答')),
         el('button', { class: 'btn sm bad', onclick: () => delEntry(e) }, '削除')),
       el('div', { class: 'muted' }, [f.aff, f.avg != null ? `平均${f.avg}` : '平均未入力'].filter(Boolean).join(' ・ ')),
@@ -697,7 +710,7 @@ async function viewEvent(id) {
     el('div', { class: 'muted' }, [
       (e.last_kana || e.first_kana) ? 'よみ：' + (e.last_kana || '') + (e.first_kana || '') : null,
       e.affiliation, e.avg_score != null ? `平均${e.avg_score}` : null,
-      e.tee ? 'ティー' + TEE[e.tee][0] : null,
+      e.sex ? (e.sex === 'F' ? '女性' : '男性') : null,
       '回答：' + (e.attendance === 'join' ? '参加' : '欠席'),
       ev.has_party && e.attendance === 'join' ? '打上げ：' + ({ join: '参加', absent: '欠席' }[e.party] || '未回答') : null
     ].filter(Boolean).join(' ・ ')),
@@ -719,7 +732,7 @@ async function viewEvent(id) {
         class: 'btn sm', onclick: () => copyText('【未回答の方】\n' + unanswered.map((p) => p.name).join('\n'))
       }, '名前をコピー')),
     unanswered.map((p) => el('div', { class: 'row between', style: 'padding:6px 0;border-top:1px solid var(--bd);margin-top:6px' },
-      el('div', { class: 'grow' }, p.name, ' ', teeDot(p.tee), el('span', { class: 'muted' }, p.affiliation ? '　' + p.affiliation : '')),
+      el('div', { class: 'grow' }, p.name, ' ', sexDot(p.sex ?? sexFromTee(p.tee)), el('span', { class: 'muted' }, p.affiliation ? '　' + p.affiliation : '')),
       el('button', { class: 'btn sm', onclick: () => addEntry(p, 'join') }, '参加'),
       el('button', { class: 'btn sm', onclick: () => addEntry(p, 'absent') }, '欠席')))) : null;
 
@@ -727,14 +740,14 @@ async function viewEvent(id) {
   const nm2 = nameInputs('', '', '', '');
   const nAff = el('input', { placeholder: '所属（任意）' });
   const nAvg = el('input', { type: 'number', inputmode: 'numeric', placeholder: '平均スコア（任意）' });
-  const nTee = teeSelect('');
+  const nSex = el('select', {}, el('option', { value: '' }, '未設定'), el('option', { value: 'M' }, '男性'), el('option', { value: 'F' }, '女性'));
   const addNew = el('details', {},
     el('summary', {}, '＋ 名簿にない人を追加する'),
     el('div', { class: 'card' },
       nm2.node,
       el('label', {}, '所属'), nAff,
       el('label', {}, '平均スコア'), nAvg,
-      el('label', {}, 'ティー'), nTee,
+      el('label', {}, '性別'), nSex,
       el('p', {}, el('button', {
         class: 'btn pri block', onclick: () => guard(async () => {
           if (!noSpace(nm2.l.value) || !noSpace(nm2.f.value)) return toast('姓と名を入力してください');
@@ -742,7 +755,7 @@ async function viewEvent(id) {
             team_id: state.team.id, last_name: noSpace(nm2.l.value), first_name: noSpace(nm2.f.value),
             name: joinName(nm2.l.value, nm2.f.value), last_kana: kanaVal(nm2.lk.value) || null, first_kana: kanaVal(nm2.fk.value),
             affiliation: strOrNull(nAff.value),
-            avg_score: scoreOrNull(nAvg.value), tee: nTee.value || null
+            avg_score: scoreOrNull(nAvg.value), sex: nSex.value || null
           }).select().single());
           await putEntry(p, 'join');
           toast('名簿と出欠に追加しました');
@@ -939,7 +952,7 @@ async function viewPlayers() {
     const f = players.filter((p) => !q || norm(p.name + (p.kana || '') + (p.affiliation || '')).includes(q));
     list.replaceChildren(...(f.length ? f.map((p) => el('a', { class: 'card link', href: '#/player/' + p.id },
       el('div', { class: 'row between' },
-        el('div', {}, el('strong', {}, p.name), ' ', teeDot(p.tee),
+        el('div', {}, el('strong', {}, p.name), ' ', sexDot(p.sex ?? sexFromTee(p.tee)),
           p.kana && el('span', { class: 'muted' }, '　' + p.kana)),
         el('span', { class: 'muted' }, p.avg_score != null ? `平均${p.avg_score}` : '')),
       p.affiliation && el('div', { class: 'muted' }, p.affiliation)))
@@ -960,7 +973,7 @@ async function viewPlayers() {
       const have = new Set(players.map((p) => norm(p.name)));
       const rows = src.filter((p) => !have.has(norm(p.name))).map((p) => ({
         team_id: state.team.id, last_name: p.last_name, first_name: p.first_name, last_kana: p.last_kana, first_kana: p.first_kana,
-        avg_score: p.avg_score, affiliation: p.affiliation, tee: p.tee, note: p.note
+        avg_score: p.avg_score, affiliation: p.affiliation, sex: p.sex ?? sexFromTee(p.tee), birth_date: p.birth_date, birth_year: p.birth_year, note: p.note
       }));
       if (!rows.length) return toast('新しくコピーする人はいません');
       if (!confirm(`${rows.length}人をこのチームの名簿に追加します（${src.length - rows.length}人は登録済みのため飛ばします）。よろしいですか？`)) return;
@@ -985,10 +998,9 @@ async function viewPlayerForm(id) {
   const nm = nameInputs(p.last_name, p.first_name, p.last_kana, p.first_kana);
   const avg = el('input', { type: 'number', inputmode: 'numeric', value: p.avg_score ?? '', placeholder: '例：98' });
   const aff = el('input', { value: p.affiliation || '', placeholder: '会社名など' });
-  const tee = teeSelect(p.tee);
   const dob = dobPicker(p.birth_date || null);
   const sexSel = el('select', {}, el('option', { value: '' }, '未設定'), el('option', { value: 'M' }, '男性'), el('option', { value: 'F' }, '女性'));
-  sexSel.value = p.sex || '';
+  sexSel.value = p.sex || sexFromTee(p.tee) || '';
   const note = el('textarea', { value: p.note || '', placeholder: '幹事用メモ（本人には見えません）' });
   return [
     el('h2', {}, id ? '名簿を編集' : '名簿に追加'),
@@ -996,8 +1008,7 @@ async function viewPlayerForm(id) {
       nm.node,
       el('label', {}, '平均スコア（不明なら空欄）'), avg,
       el('label', {}, '所属'), aff,
-      el('label', {}, 'ティー'), tee,
-      el('label', {}, '性別（未設定ならティーの色から判定）'), sexSel,
+      el('label', {}, '性別'), sexSel,
       el('label', {}, '生年月日（任意・同スコアの順位づけに使います）'), dob.node,
       el('label', {}, 'メモ'), note),
     el('button', {
@@ -1012,7 +1023,7 @@ async function viewPlayerForm(id) {
           sex: sexSel.value || null,
           birth_date: dob.get() === 'bad' ? null : dob.get(),
           birth_year: dob.get() && dob.get() !== 'bad' ? Number(dob.get().slice(0, 4)) : null,
-          affiliation: strOrNull(aff.value), tee: tee.value || null, note: strOrNull(note.value)
+          affiliation: strOrNull(aff.value), note: strOrNull(note.value)
         };
         if (id) must(await state.sb.from('players').update(payload).eq('id', id));
         else must(await state.sb.from('players').insert({ ...payload, team_id: state.team.id }));
@@ -1033,11 +1044,11 @@ async function viewPlayerForm(id) {
 async function viewImport() {
   const ta = el('textarea', {
     style: 'min-height:200px',
-    placeholder: '1行に1人。カンマまたはタブ区切り\n姓,名,姓のよみ,名のよみ,平均スコア,所属,ティー\n山田,太郎,やまだ,たろう,98,A商事,青\n佐藤,花子,さとう,はなこ,105,B工業,赤'
+    placeholder: '1行に1人。カンマまたはタブ区切り\n姓,名,姓のよみ,名のよみ,平均スコア,所属,性別\n山田,太郎,やまだ,たろう,98,A商事,男\n佐藤,花子,さとう,はなこ,105,B工業,女'
   });
   return [
     el('h2', {}, '名簿をまとめて追加'),
-    el('p', { class: 'muted' }, 'Excelからコピーして貼り付けてもOK。姓と名は必須、よみ・平均スコア・所属・ティーは省略できます（順番はそのまま。平均スコアが不明なら空欄か0）。すでに名簿にある同じ姓名の人は飛ばします。'),
+    el('p', { class: 'muted' }, 'Excelからコピーして貼り付けてもOK。姓と名は必須、よみ・平均スコア・所属・性別（男／女）は省略できます（順番はそのまま。平均スコアが不明なら空欄か0）。すでに名簿にある同じ姓名の人は飛ばします。'),
     ta,
     el('p', {}, el('button', {
       class: 'btn pri block', onclick: () => guard(async () => {
@@ -1059,7 +1070,7 @@ async function viewImport() {
             team_id: state.team.id, last_name: noSpace(cols[0]), first_name: noSpace(cols[1]),
             name: joinName(cols[0], cols[1]), last_kana: kanaVal(cols[2]) || null, first_kana: kanaVal(cols[3]),
             avg_score: score != null && score >= 50 && score <= 200 ? score : null,
-            affiliation: strOrNull(cols[5]), tee: teeFromText(cols[6])
+            affiliation: strOrNull(cols[5]), sex: sexFromText(cols[6])
           });
         }
         if (!rows.length) return toast(bad ? '姓と名の両方が必要です（名が空の行があります）' : (skipped ? '新しく追加する人がいません' : '取り込む行がありません'));
@@ -1439,7 +1450,7 @@ async function viewResults(id) {
     el('div', { class: 'row between' },
       el('div', {}, el('h2', { style: 'margin-bottom:0' }, '成績・順位'), el('div', { class: 'muted' }, ev.name))),
     el('div', { class: 'card' }, readBtn, msg, fileIn,
-      el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、ティーが赤なら女、白・青・金・黒なら男として自動で扱います（変えたい人だけ選び直してください）。'),
+      el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、出欠フォームの回答か名簿の性別を使います（変えたい人だけ選び直してください）。'),
       el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す')),
       modelPicker('results')),
     root
@@ -2045,7 +2056,7 @@ async function viewGroups(id) {
     const f = d.eff(e);
     const gone = e.attendance !== 'join';
     return el('div', { class: 'mem' + (selected === e.id ? ' sel' : '') + (gone ? ' gone' : ''), onclick: () => onChip(e) },
-      teeDot(f.tee), el('strong', {}, e.name),
+      sexDot(f.sex), el('strong', {}, e.name),
       el('small', {}, [f.aff, f.avg != null ? '平均' + f.avg : null, gone ? (e.attendance === 'cancelled' ? '当日キャンセル' : '欠席') : null].filter(Boolean).join(' ・ ')));
   };
 
@@ -2197,7 +2208,7 @@ async function viewGroups(id) {
 
     nodes.push(el('div', { class: 'card' },
       el('strong', {}, '自動で組分け'),
-      el('p', { class: 'muted' }, 'ロックした組はそのまま、残りの人を、平均スコア・所属・男女比がそろうように振り分けます（男女はティーの色から自動で判定。赤＝女、他＝男）。人数が4の倍数でないときは3人組にします。'),
+      el('p', { class: 'muted' }, 'ロックした組はそのまま、残りの人を、平均スコア・所属・男女比がそろうように振り分けます（男女は出欠フォームの回答か名簿の性別から判定）。人数が4の倍数でないときは3人組にします。'),
       el('div', { class: 'row', style: 'flex-wrap:nowrap' },
         el('div', { class: 'grow' }, el('label', {}, '同じ所属は'), optAff),
         el('div', { class: 'grow' }, el('label', {}, '組の強さは'), optScore)),
