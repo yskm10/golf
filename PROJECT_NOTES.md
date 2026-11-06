@@ -5,7 +5,7 @@
 ## 概要
 - 持ち主：森雄介（株式会社メディコム）。複数の幹事で共有、スマホが中心（PCも使う）。8〜100人、定例も単発も。
 - 構成：`index.html` 1ファイル（素のJS）を GitHub Pages で公開 ＋ Supabase（プロジェクト `golf-compe`、ref `sotrrieijxizfpbsumti`）。
-- 公開URL：https://yskm10.github.io/golf/ ／ リポジトリ：`yskm10/golf`（mainにpushすると公開される）。
+- 公開URL：https://golf.medicom.co.jp/（独自ドメイン。DNSはVALUE-DOMAINのCNAME golf→yskm10.github.io.、リポジトリ直下のCNAMEファイルとGitHub Pagesのカスタムドメイン設定。旧 https://yskm10.github.io/golf/ は新URLへ自動転送される。localStorageはオリジンごとのため、切替時に幹事は管理用URL(?t=)を開き直す）／ リポジトリ：`yskm10/golf`（mainにpushすると公開される）。
 - 幹事用URL：`?t=<チームの管理トークン>`（知っている人はそのチームの管理者）／ 出欠フォーム：`?f=<コンペのフォームトークン>`（ログイン不要）。
 
 ## 画面と機能（すべて index.html）
