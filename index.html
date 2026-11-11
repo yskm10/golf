@@ -384,8 +384,15 @@ async function init() {
     ls.set('golf_token', t);
     history.replaceState(null, '', location.pathname + location.hash);
   }
+  // ログインに失敗して戻ってきたときは、理由を表示する（無言で最初の画面に戻らないように）
+  const authErr = q.get('error_description') || q.get('error');
+  if (authErr) history.replaceState(null, '', location.pathname + location.hash);
   await syncAccount();
   state.token = ls.get('golf_token');
+  if (authErr && !state.user) {
+    if (!state.token) return renderWelcome('ログインに失敗しました：' + authErr);
+    toast('ログインに失敗しました：' + authErr);
+  }
   if (!state.token) return renderWelcome();
   state.sb = makeClient(state.token);
   let team = null;
