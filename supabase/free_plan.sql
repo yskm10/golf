@@ -68,3 +68,9 @@ language sql stable security definer set search_path = public as $$
   from public.teams t where t.id = public.current_team_id();
 $$;
 grant execute on function public.team_status() to anon, authenticated;
+
+-- 【現在の運用（2026-11-11〜）】公開前の友人テスト中は、すべて有料扱い（制限なし）にしている。
+--   alter table public.teams alter column plan set default 'pro';
+--   公開するときは、次の2行で、無料プランの初期値に戻す（既存チームを free に戻すかは、そのとき決める）。
+--   alter table public.teams alter column plan set default 'free';
+
