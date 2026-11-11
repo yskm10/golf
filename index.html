@@ -465,6 +465,7 @@ function renderWelcome(errText) {
         el('div', { class: 'card center', style: 'padding:28px 16px' },
           el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(loginWithLine) }, 'LINEでログイン')),
           el('p', { class: 'muted' }, 'LINEアカウントでログインして、はじめます。')),
+        el('p', { class: 'muted center', style: 'margin-top:16px;font-size:13px' }, el('a', { href: 'install.html' }, 'ホーム画面への追加方法')),
         legalLinks())));
     return;
   }
