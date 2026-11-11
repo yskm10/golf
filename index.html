@@ -314,6 +314,9 @@ async function syncAccount() {
   if (!state.user) return;
   try {
     const { data } = await authClient().rpc('my_teams');
+    const linked = new Set((data || []).map((t) => t.admin_token));
+    // この端末に保存されているチームのうち、まだ紐づいていないものを、すべて紐づける（失敗しても続ける）
+    getTeams().filter((t) => !linked.has(t.token)).forEach((t) => authClient().rpc('claim_team', { p_token: t.token }).then(() => {}, () => {}));
     (data || []).forEach((t) => rememberTeam(t.admin_token, t.name));
     if (!ls.get('golf_token') && data && data.length) ls.set('golf_token', data[0].admin_token);
   } catch (e) { /* 復元できなくても、今の端末の状態で続ける */ }
