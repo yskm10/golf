@@ -321,6 +321,9 @@ async function syncAccount() {
     if (!ls.get('golf_token') && data && data.length) ls.set('golf_token', data[0].admin_token);
   } catch (e) { /* 復元できなくても、今の端末の状態で続ける */ }
 }
+const legalLinks = () => el('p', { class: 'muted center', style: 'margin-top:20px;font-size:13px' },
+  el('a', { href: 'terms.html', target: '_blank', rel: 'noopener' }, '利用規約'), '　・　',
+  el('a', { href: 'privacy.html', target: '_blank', rel: 'noopener' }, 'プライバシーポリシー'));
 function accountCard() {
   if (state.user) {
     return el('div', { class: 'card' },
@@ -430,7 +433,8 @@ function renderWelcome(errText) {
         errText && el('p', { class: 'err' }, errText),
         el('div', { class: 'card center', style: 'padding:28px 16px' },
           el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(loginWithLine) }, 'LINEでログイン')),
-          el('p', { class: 'muted' }, 'LINEアカウントでログインして、はじめます。')))));
+          el('p', { class: 'muted' }, 'LINEアカウントでログインして、はじめます。')),
+        legalLinks())));
     return;
   }
   // ログイン後（紐づいたチームがまだない）：チームを作る／以前のチームを引き継ぐ
@@ -475,7 +479,8 @@ function renderWelcome(errText) {
             ls.set('golf_token', tok);
             init();
           }
-        }, '引き継ぐ'))))));
+        }, '引き継ぐ')))),
+      legalLinks()));
 }
 
 /* ====== 幹事画面：ルーティング ====== */
@@ -2505,7 +2510,8 @@ async function viewSettings() {
       el('p', {}, el('button', { class: 'btn sm pri', onclick: () => copyText(adminUrl) }, '幹事用URLをコピー'))),
     accountCard(),
     el('div', { class: 'card' },
-      el('a', { class: 'btn block', href: '#/teams' }, 'チームを切り替える・新しく作る'))
+      el('a', { class: 'btn block', href: '#/teams' }, 'チームを切り替える・新しく作る')),
+    legalLinks()
   ];
 }
 

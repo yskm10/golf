@@ -82,6 +82,7 @@
 - DB（`supabase/auth_accounts.sql`、実行済み）：`team_members(team_id,user_id)`（RLSオン・ポリシーなし）、RPC `claim_team(p_token)` / `my_teams()` / `unclaim_team(p_token)`（authenticatedのみ実行可）。1チームに複数アカウントを紐づけ可能（幹事が複数いるため）。
 - フロント：`authClient()`（persistSession、PKCE、storageKey `golf-auth`）、`syncAccount()`（起動時にmy_teamsで端末へ復元）、`accountCard()`（ウェルカム画面と設定画面）。ログイン中に開いたチームは自動で `claim_team`。「この端末から外す」は `unclaim_team` も呼ぶ。
 - 方針メモ：Appleログインは、iOSのストア公開時に追加（後回し）。無料枠（同時進行コンペ1件／AI読み取り通算3回、失敗は数えない）はアカウント単位でサーバー側に実装予定（未実装）。結果画像のLINE送信は、無料は透かし入り、有料は透かしなし＋表彰カード等。
-- 未公開：`privacy.html` / `terms.html` は作成済みだが、問い合わせ先（Googleフォーム）が未定のためコミットしていない。
+- 公開済み（2026-11-11）：`privacy.html`（プライバシーポリシー）/ `terms.html`（利用規約）。問い合わせ先はGoogleフォーム https://forms.gle/m8F1JNPeMe1TYfFD8（メール通知オン）。アプリのログイン画面・設定画面の下からリンク。有料化の前に、特定商取引法に基づく表記のページを追加する。公開前に専門家のチェックを推奨。
 - 実機確認が必要：LINEログインの一連の流れ（サンドボックスでは不可）。
 - 最初の画面（2026-11-11変更）：ログイン前はLINEログインのボタンだけ。ログイン後でチームがない場合に、「新しくチームを作る」「以前のチームを引き継ぐ（幹事用URLを貼る）」を表示。チーム作成はUI上ログイン必須（create_team RPCはまだサーバー側でログイン必須にしていない。無料枠の実装時に強制する）。既存の幹事用URL（?t=）でそのまま開く利用は、ログイン不要のまま。
+- LINEログインの不具合メモ：SupabaseのCustom Provider（OIDC・自動読み込み）は、LINEのウェブログインがHS256で署名するため、ID token検証で失敗する（公開情報はES256）。手動設定（Issuer URLあり・JWKS URI空欄）に作り直して解消した。ログイン失敗時は、URLのerror_descriptionを最初の画面に表示する。ログイン中は、この端末のチームを全部 claim_team で紐づける。
