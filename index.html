@@ -412,20 +412,39 @@ async function init() {
 }
 
 function renderWelcome(errText) {
+  // ログイン前：ログインボタンだけの画面
+  if (!state.user) {
+    mount(el('div', {},
+      el('header', {}, el('h1', {}, '⛳ 幹事キャディ')),
+      el('main', {},
+        errText && el('p', { class: 'err' }, errText),
+        el('div', { class: 'card center', style: 'padding:28px 16px' },
+          el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(loginWithLine) }, 'LINEでログイン')),
+          el('p', { class: 'muted' }, 'LINEアカウントでログインして、はじめます。')))));
+    return;
+  }
+  // ログイン後（紐づいたチームがまだない）：チームを作る／以前のチームを引き継ぐ
   const nameIn = el('input', { placeholder: '例：○○ゴルフ会 幹事チーム' });
-  const urlIn = el('input', { placeholder: '幹事用URLを貼り付け' });
+  const urlIn = el('input', { placeholder: '以前の幹事用URLを貼り付け' });
   mount(el('div', {},
-    el('header', {}, el('h1', {}, '⛳ 幹事キャディ')),
+    el('header', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px' },
+      el('h1', {}, '⛳ 幹事キャディ'),
+      el('button', {
+        class: 'btn sm', style: 'background:#fff', onclick: () => guard(async () => {
+          await authClient().auth.signOut();
+          state.user = null;
+          renderWelcome();
+        })
+      }, 'ログアウト')),
     el('main', {},
       errText && el('p', { class: 'err' }, errText),
-      accountCard(),
-      state.user && el('p', { class: 'muted' }, 'このアカウントに紐づいたチームはまだありません。新しく作るか、幹事用URLを開くと、紐づきます。'),
       el('div', { class: 'card' },
-        el('h2', {}, '新しく始める'),
+        el('h2', {}, '新しくチームを作る'),
         el('p', { class: 'muted' }, '幹事のみんなで共有するチームを作ります。作成後に出る「幹事用URL」を他の幹事に送ると、同じデータを見られます。'),
         el('label', {}, 'チーム名'), nameIn,
         el('p', {}, el('button', {
           class: 'btn pri block', onclick: () => guard(async () => {
+            if (!nameIn.value.trim()) return toast('チーム名を入力してください');
             const r = must(await makeClient(null).rpc('create_team', { p_name: nameIn.value }));
             const row = Array.isArray(r) ? r[0] : r;
             ls.set('golf_token', row.admin_token);
@@ -434,17 +453,17 @@ function renderWelcome(errText) {
           })
         }, 'チームを作る'))),
       el('div', { class: 'card' },
-        el('h2', {}, '幹事用URLを持っている'),
+        el('h2', {}, '以前のチームを引き継ぐ'),
+        el('p', { class: 'muted' }, 'これまで使っていた「幹事用URL」を貼り付けると、そのチームがこのアカウントに紐づきます。次回からは、ログインするだけで開けます。'),
         urlIn,
         el('p', {}, el('button', {
           class: 'btn block', onclick: () => {
-            const v = urlIn.value.trim();
-            const m = v.match(/[?&]t=([A-Za-z0-9]+)/) || (/^[A-Za-z0-9]{20,}$/.test(v) ? [null, v] : null);
-            if (!m) return toast('URLを確認してください');
-            ls.set('golf_token', m[1]);
+            const tok = tokenFromInput(urlIn.value);
+            if (!tok) return toast('URLを確認してください');
+            ls.set('golf_token', tok);
             init();
           }
-        }, '開く'))))));
+        }, '引き継ぐ'))))));
 }
 
 /* ====== 幹事画面：ルーティング ====== */
