@@ -12,6 +12,7 @@ const MAX_IMAGE_CHARS = 2_000_000; // 1枚あたりのbase64の長さ上限
 const DEFAULT_MODEL = Deno.env.get('READ_MODEL') || 'claude-sonnet-5-5';
 const ALLOWED_MODELS = ['claude-sonnet-5-5', 'claude-haiku-4-5-20251001']; // 画面からの比較テスト用に切り替えてよいモデル
 const MAX_TEXT_CHARS = 12000;
+const FREE_AI_LIMIT = 3; // 無料プランで読み取れる回数（通算。失敗は数えない）。supabase/free_plan.sql の team_status() と揃える
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -52,7 +53,7 @@ Deno.serve(async (req) => {
     const token = req.headers.get('x-team-token');
     if (!token) return json({ error: 'unauthorized' }, 401);
     const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    const { data: team } = await admin.from('teams').select('id').eq('admin_token', token).maybeSingle();
+    const { data: team } = await admin.from('teams').select('id, plan').eq('admin_token', token).maybeSingle();
     if (!team) return json({ error: 'unauthorized' }, 401);
 
     // 2) 回数制限
@@ -60,6 +61,15 @@ Deno.serve(async (req) => {
     const { count } = await admin.from('read_log').select('id', { count: 'exact', head: true })
       .eq('team_id', team.id).gte('used_at', since);
     if ((count ?? 0) >= DAILY_LIMIT) return json({ error: 'rate_limited' }, 429);
+
+    // 2b) 無料プランの上限（成功した読み取りだけを数える）
+    let freeUsed: number | null = null;
+    if (team.plan !== 'pro') {
+      const { count: used } = await admin.from('read_log').select('id', { count: 'exact', head: true })
+        .eq('team_id', team.id).not('input_tokens', 'is', null);
+      freeUsed = used ?? 0;
+      if (freeUsed >= FREE_AI_LIMIT) return json({ error: 'free_limit', limit: FREE_AI_LIMIT, used: freeUsed }, 402);
+    }
 
     // 3) 画像の検証
     const body = await req.json().catch(() => null);
@@ -111,7 +121,7 @@ Deno.serve(async (req) => {
     }
     const usage = out.usage ?? {};
     if (logRow?.id) await admin.from('read_log').update({ input_tokens: usage.input_tokens ?? null, output_tokens: usage.output_tokens ?? null }).eq('id', logRow.id);
-    return json({ ok: true, data: tool.input, model, usage: { input: usage.input_tokens ?? null, output: usage.output_tokens ?? null } });
+    return json({ ok: true, data: tool.input, model, usage: { input: usage.input_tokens ?? null, output: usage.output_tokens ?? null }, quota: freeUsed === null ? null : { used: freeUsed + 1, limit: FREE_AI_LIMIT } });
   } catch (e) {
     console.error('read-results error', e);
     return json({ error: 'server_error' }, 500);

@@ -246,6 +246,10 @@ function errMsg(e) {
     score_required: '平均スコアを入力してください（初めての方は0）',
     kana_required: '姓のよみ・名のよみを入力してください',
     rate_limited: '今日の読み取り回数の上限に達しました。明日また試すか、手で入力してください',
+    free_limit: '無料のAI読み取り（3回）を使い切りました。手入力は引き続き使えます。有料プランは準備中です（設定からお問い合わせください）',
+    free_event_limit: '無料プランでは、進行中のコンペは同時に1件までです。開催日が過ぎるか、削除すると、新しく作れます。有料プランは準備中です',
+    free_team_limit: '無料プランで作れるチームは、1つまでです',
+    login_required: 'チームを作るには、LINEでログインしてください',
     read_failed: '読み取りに失敗しました。もう一度試すか、手で入力してください',
     player_not_found: '名簿の選択をやり直してください'
   };
@@ -368,7 +372,34 @@ function modelPicker(kind) {
       : '精度を比べるときだけ変えます。ふだんは「おまかせ」で使ってください。'));
 }
 const readModel = (kind) => { try { return ls.get('golf_read_model_' + kind) || undefined; } catch (e) { return undefined; } };
-const usageNote = (j) => (j && j.usage && j.usage.input != null ? `（${j.model.includes('haiku') ? '低コスト' : '標準'}・入力${j.usage.input}・出力${j.usage.output}）` : '');
+const quotaNote = (j) => (j && j.quota ? `　無料の読み取り：あと${Math.max(0, j.quota.limit - j.quota.used)}回` : '');
+const usageNote = (j) => (j && j.usage && j.usage.input != null ? `（${j.model.includes('haiku') ? '低コスト' : '標準'}・入力${j.usage.input}・出力${j.usage.output}）` : '') + quotaNote(j);
+const readErr = (j) => (j && j.error === 'rate_limited' ? 'rate_limited' : j && j.error === 'free_limit' ? 'free_limit' : 'read_failed');
+// 今のチームの状況（プラン・AI読み取りの使用回数・進行中のコンペ数）
+async function loadStatus() {
+  try { const r = await state.sb.rpc('team_status'); state.status = (Array.isArray(r.data) ? r.data[0] : r.data) || null; } catch (e) { state.status = null; }
+  return state.status;
+}
+const isFree = () => !!state.status && state.status.plan !== 'pro';
+const quotaText = () => (isFree() ? `無料プラン：AI読み取りは、あと${Math.max(0, state.status.ai_limit - state.status.ai_used)}回です（手入力は何度でも無料です）` : '');
+const CONTACT_URL = 'https://forms.gle/m8F1JNPeMe1TYfFD8';
+function quotaLine() {
+  const d = el('div', { class: 'muted', style: 'margin-top:6px' });
+  loadStatus().then(() => { d.textContent = quotaText(); });
+  return d;
+}
+function planCard() {
+  const st = state.status;
+  if (!st) return null;
+  if (st.plan === 'pro') return el('div', { class: 'card' }, el('strong', {}, 'プラン'), el('p', {}, '有料プラン（制限なし）'));
+  return el('div', { class: 'card' },
+    el('strong', {}, 'プラン'),
+    el('p', {}, '無料プラン'),
+    el('div', { class: 'muted' }, `進行中のコンペ：${st.events_active} / ${st.events_limit}件`),
+    el('div', { class: 'muted' }, `AI読み取り：あと${Math.max(0, st.ai_limit - st.ai_used)}回（全${st.ai_limit}回）`),
+    el('p', { class: 'muted' }, '手入力、組分け、出欠、集金、成績の集計は、無料のまま使えます。有料プランは準備中です。ご希望の方は、お問い合わせください。'),
+    el('p', {}, el('a', { class: 'btn sm', href: CONTACT_URL, target: '_blank', rel: 'noopener' }, 'お問い合わせ')));
+}
 async function fileToJpeg(file, max = 1600) {
   const url = URL.createObjectURL(file);
   try {
@@ -461,7 +492,7 @@ function renderWelcome(errText) {
         el('p', {}, el('button', {
           class: 'btn pri block', onclick: () => guard(async () => {
             if (!nameIn.value.trim()) return toast('チーム名を入力してください');
-            const r = must(await makeClient(null).rpc('create_team', { p_name: nameIn.value }));
+            const r = must(await authClient().rpc('create_team', { p_name: nameIn.value }));
             const row = Array.isArray(r) ? r[0] : r;
             ls.set('golf_token', row.admin_token);
             location.hash = '#/settings';
@@ -557,6 +588,19 @@ async function viewEvents() {
 }
 
 async function viewEventForm(id) {
+  if (!id) {
+    await loadStatus();
+    if (isFree() && state.status.events_active >= state.status.events_limit) {
+      return [
+        el('h2', {}, '新しいコンペ'),
+        el('div', { class: 'card' },
+          el('strong', {}, '無料プランでは、進行中のコンペは同時に1件までです'),
+          el('p', { class: 'muted' }, '今あるコンペの開催日が過ぎるか、コンペを削除すると、新しく作れます。有料プランは準備中です。ご希望の方は、お問い合わせください。'),
+          el('p', {}, el('a', { class: 'btn pri block', href: '#/events' }, 'コンペ一覧に戻る')),
+          el('p', {}, el('a', { class: 'btn block', href: CONTACT_URL, target: '_blank', rel: 'noopener' }, 'お問い合わせ')))
+      ];
+    }
+  }
   const ev = id
     ? must(await state.sb.from('events').select('*').eq('id', id).single())
     : { name: '', event_date: '', course_name: '', group_count_hint: '', has_party: false, form_deadline: null, fee_per_person: '', compe_fee: '', includes: '', payment_note: 'スタート前に現金で受付へ', playfee_by_self: true, small_group_fee: '', cancel_policy: '', notes_admin: '', notes_line: '' };
@@ -634,7 +678,7 @@ async function viewEventForm(id) {
         body: JSON.stringify({ images, model: readModel('booking') })
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
+      if (!r.ok || !j.ok) throw new Error(readErr(j));
       applyBooking(j.data);
       readMsg.textContent = '読み取りました。内容を確認して、違うところは直してください。' + usageNote(j);
     } catch (e) {
@@ -658,7 +702,7 @@ async function viewEventForm(id) {
         body: JSON.stringify({ text, model: readModel('booking') })
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
+      if (!r.ok || !j.ok) throw new Error(readErr(j));
       applyBooking(j.data);
       readMsg.textContent = '読み取りました。内容を確認して、違うところは直してください。' + usageNote(j);
     } catch (e) { readMsg.textContent = ''; throw e; } finally { pasteBtn.disabled = false; readBtn.disabled = false; }
@@ -666,7 +710,7 @@ async function viewEventForm(id) {
   return [
     el('h2', {}, id ? 'コンペを編集' : '新しいコンペ'),
     el('div', { class: 'card' },
-      !id && el('div', {}, readBtn, readMsg, slotInfo, fileIn,
+      !id && el('div', {}, readBtn, quotaLine(), readMsg, slotInfo, fileIn,
         el('p', { class: 'muted' }, '予約確認画面のスクショを何枚でも選べます（8枚まで）。読み取った内容は入力欄に入るだけで、保存は「保存」を押したときです。'),
         el('label', {}, 'または、文章を貼り付けて読み取る'), pasteIn, el('p', {}, pasteBtn), modelPicker('booking')),
       el('label', {}, 'コンペ名'), name,
@@ -1478,7 +1522,7 @@ async function viewResults(id) {
         body: JSON.stringify({ images, model: readModel('results') })
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error === 'rate_limited' ? 'rate_limited' : 'read_failed');
+      if (!r.ok || !j.ok) throw new Error(readErr(j));
       preview = (j.data.rows || []).map((row) => ({ row, entryId: match(row) || '' }));
       msg.textContent = `${preview.length}人分を読み取りました。名前の対応を確認して「反映する」を押してください。` + usageNote(j);
       draw();
@@ -1543,7 +1587,7 @@ async function viewResults(id) {
   return [
     el('div', { class: 'row between' },
       el('div', {}, el('h2', { style: 'margin-bottom:0' }, '成績・順位'), el('div', { class: 'muted' }, ev.name))),
-    el('div', { class: 'card' }, readBtn, msg, fileIn,
+    el('div', { class: 'card' }, readBtn, quotaLine(), msg, fileIn,
       el('p', { class: 'muted' }, '成績表の写真を読み込むと、順位・グロス・ネットが入ります（名前が合わない人は選び直せます）。手で直すこともできます。性別は、出欠フォームの回答か名簿の性別を使います（変えたい人だけ選び直してください）。'),
       el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: autoRank }, 'ネットから順位を計算し直す')),
       modelPicker('results')),
@@ -2462,7 +2506,8 @@ async function viewTeams() {
       el('p', {}, el('button', {
         class: 'btn pri block', onclick: () => guard(async () => {
           if (!nameIn.value.trim()) return toast('チーム名を入力してください');
-          const r = must(await makeClient(null).rpc('create_team', { p_name: nameIn.value }));
+          if (!state.user) return toast('チームを作るには、設定からLINEでログインしてください');
+          const r = must(await authClient().rpc('create_team', { p_name: nameIn.value }));
           const row = Array.isArray(r) ? r[0] : r;
           rememberTeam(row.admin_token, nameIn.value.trim());
           switchTo(row.admin_token);
@@ -2488,6 +2533,7 @@ async function viewTeams() {
 
 /* ====== 設定 ====== */
 async function viewSettings() {
+  await loadStatus();
   const adminUrl = `${base()}?t=${state.token}`;
   const name = el('input', { value: state.team.name });
   return [
@@ -2508,6 +2554,7 @@ async function viewSettings() {
       el('p', { class: 'muted' }, '他の幹事にこのURLを送ると、同じ名簿・コンペを編集できます。URLを知っている人は誰でも編集できるので、幹事以外には送らないでください。参加者には、コンペごとの「出欠フォームURL」を配ります。'),
       el('input', { value: adminUrl, readonly: true, onclick: (e) => e.target.select() }),
       el('p', {}, el('button', { class: 'btn sm pri', onclick: () => copyText(adminUrl) }, '幹事用URLをコピー'))),
+    planCard(),
     accountCard(),
     el('div', { class: 'card' },
       el('a', { class: 'btn block', href: '#/teams' }, 'チームを切り替える・新しく作る')),
