@@ -428,7 +428,9 @@ function renderWelcome(errText) {
   const urlIn = el('input', { placeholder: '以前の幹事用URLを貼り付け' });
   mount(el('div', {},
     el('header', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px' },
-      el('h1', {}, '⛳ 幹事キャディ'),
+      el('div', { style: 'min-width:0' },
+        el('h1', {}, '⛳ 幹事キャディ'),
+        el('div', { style: 'font-size:12px;opacity:.85;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, '👤 ' + userName(state.user))),
       el('button', {
         class: 'btn sm', style: 'background:#fff', onclick: () => guard(async () => {
           await authClient().auth.signOut();
@@ -471,7 +473,9 @@ function shell(active, content, back) {
   const tab = (id, label, href) => el('a', { href, class: active === id ? 'on' : '' }, label);
   return el('div', {},
     el('header', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px' },
-      el('h1', {}, el('a', { href: '#/teams' }, '⛳ ' + (state.team ? state.team.name : '組分け') + ' ▾')),
+      el('div', { style: 'min-width:0' },
+        el('h1', {}, el('a', { href: '#/teams' }, '⛳ ' + (state.team ? state.team.name : '組分け') + ' ▾')),
+        state.user && el('a', { href: '#/settings', style: 'display:block;font-size:12px;opacity:.85;color:inherit;text-decoration:none;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, '👤 ' + userName(state.user))),
       back ? el('a', { class: 'btn sm', style: 'background:#fff', href: back.href }, back.label) : null),
     el('main', {}, content),
     el('nav', { class: 'tabs' },
