@@ -75,3 +75,12 @@
 - 出欠フォームで性別（参加なら必須・男性/女性）と生年月日（任意・年月日の3選択）を聞く（`supabase/form_sex_birth.sql` 実行済み）。`form_submit` に `p_sex`・`p_birth_date`（既定null、旧クライアントでも動く）を追加し、entries.sex/birth_date/birth_year と、名簿（players.sex/birth_date/birth_year）の未入力分に反映。`approve_entry` も引き継ぐ。回答者の端末には `golf_me` に性別・生年月日も記憶（次回の入力を省く）。性別の優先順は entries.sex ＞ players.sex ＞ ティーの色。年齢の同スコア判定は生年月日があれば日付、なければ生まれ年で比べる。名簿の編集画面に性別と生年月日を追加（生まれ年の入力欄は廃止）。
 - 注意：生年月日は個人情報。プライバシーポリシー（ストア公開の段階2）に、取得目的（同スコアの順位づけ）と幹事以外に見せないことを書く。
 - ティー入力は廃止（名簿の編集・名簿にない人の追加・Excel貼り付けの7列目は「性別（男／女）」に変更。昔のティー色の列も男女に読み替え）。人名の横の丸印は性別（女＝赤、男＝白）。DBの players.tee / entries.tee 列は残す（過去データ）。既存の名簿・出欠は、ティーから性別を一括補完済み（赤＝女、他＝男。ティー未設定の13人は性別未設定のまま）。性別の優先順は entries.sex ＞ players.sex ＞ ティー（旧データのみ）。
+
+## LINEログイン（2026-11-11）
+- 方針：チームの権限は従来どおり幹事用トークン（x-team-token）。ログインは「トークンを取り戻す・引き継ぐ」層。既存のRLSは変えていない。
+- Supabase Auth：Custom Provider `custom:line`（OIDC、issuer `https://access.line.me`、scopes `openid, profile`、Allow users without email=ON）。LINEチャネルID 2012549358（LINEログイン、ウェブアプリ）。コールバック `https://sotrrieijxizfpbsumti.supabase.co/auth/v1/callback`。Supabase の Site URL / Redirect URLs に `https://golf.medicom.co.jp/**` を登録する必要あり。
+- DB（`supabase/auth_accounts.sql`、実行済み）：`team_members(team_id,user_id)`（RLSオン・ポリシーなし）、RPC `claim_team(p_token)` / `my_teams()` / `unclaim_team(p_token)`（authenticatedのみ実行可）。1チームに複数アカウントを紐づけ可能（幹事が複数いるため）。
+- フロント：`authClient()`（persistSession、PKCE、storageKey `golf-auth`）、`syncAccount()`（起動時にmy_teamsで端末へ復元）、`accountCard()`（ウェルカム画面と設定画面）。ログイン中に開いたチームは自動で `claim_team`。「この端末から外す」は `unclaim_team` も呼ぶ。
+- 方針メモ：Appleログインは、iOSのストア公開時に追加（後回し）。無料枠（同時進行コンペ1件／AI読み取り通算3回、失敗は数えない）はアカウント単位でサーバー側に実装予定（未実装）。結果画像のLINE送信は、無料は透かし入り、有料は透かしなし＋表彰カード等。
+- 未公開：`privacy.html` / `terms.html` は作成済みだが、問い合わせ先（Googleフォーム）が未定のためコミットしていない。
+- 実機確認が必要：LINEログインの一連の流れ（サンドボックスでは不可）。

@@ -289,6 +289,56 @@ function makeClient(token) {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
   });
 }
+/* ====== アカウント（LINEログイン） ======
+   チームの権限は従来どおり幹事用トークンで判定する。ログインは「トークンを取り戻す・引き継ぐ」ための層。 */
+let _auth = null;
+function authClient() {
+  if (!_auth) {
+    _auth = supabase.createClient(SB_URL, SB_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce', storageKey: 'golf-auth' }
+    });
+  }
+  return _auth;
+}
+async function currentUser() {
+  try { const { data } = await authClient().auth.getSession(); return data && data.session ? data.session.user : null; } catch (e) { return null; }
+}
+const userName = (u) => (u && u.user_metadata && (u.user_metadata.name || u.user_metadata.full_name || u.user_metadata.preferred_username)) || 'LINEアカウント';
+async function loginWithLine() {
+  const { error } = await authClient().auth.signInWithOAuth({ provider: 'custom:line', options: { redirectTo: base() } });
+  if (error) throw error;
+}
+// ログイン中なら、アカウントに紐づいたチームをこの端末に復元する
+async function syncAccount() {
+  state.user = await currentUser();
+  if (!state.user) return;
+  try {
+    const { data } = await authClient().rpc('my_teams');
+    (data || []).forEach((t) => rememberTeam(t.admin_token, t.name));
+    if (!ls.get('golf_token') && data && data.length) ls.set('golf_token', data[0].admin_token);
+  } catch (e) { /* 復元できなくても、今の端末の状態で続ける */ }
+}
+function accountCard() {
+  if (state.user) {
+    return el('div', { class: 'card' },
+      el('div', { class: 'row between' },
+        el('div', {}, el('strong', {}, 'ログイン中'), el('div', { class: 'muted' }, userName(state.user))),
+        el('button', {
+          class: 'btn sm', onclick: () => guard(async () => {
+            await authClient().auth.signOut();
+            state.user = null;
+            toast('ログアウトしました');
+            if (state.team) routeAdmin(); else renderWelcome();
+          })
+        }, 'ログアウト')),
+      el('p', { class: 'muted' }, 'チームはこのアカウントに紐づきます。機種変更やブラウザのデータ削除をしても、LINEでログインすれば、元に戻せます。'));
+  }
+  return el('div', { class: 'card' },
+    el('strong', {}, 'LINEでログイン'),
+    el('p', { class: 'muted' }, 'ログインしておくと、機種変更やブラウザのデータ削除をしても、チームを引き継げます。以前のチームがあれば、ログインするだけで戻せます。'),
+    el('p', {}, el('button', { class: 'btn pri block', onclick: () => guard(loginWithLine) }, 'LINEでログイン')));
+}
+
 function teeSelect(current) {
   return el('select', { value: current || '' },
     el('option', { value: '' }, '指定なし'),
@@ -334,6 +384,7 @@ async function init() {
     ls.set('golf_token', t);
     history.replaceState(null, '', location.pathname + location.hash);
   }
+  await syncAccount();
   state.token = ls.get('golf_token');
   if (!state.token) return renderWelcome();
   state.sb = makeClient(state.token);
@@ -351,6 +402,8 @@ async function init() {
   }
   state.team = team;
   rememberTeam(state.token, team.name);
+  // ログイン中なら、今のチームをアカウントに紐づける（失敗しても、そのまま使える）
+  if (state.user) authClient().rpc('claim_team', { p_token: state.token }).then(() => {}, () => {});
   if (!state.listening) {
     state.listening = true;
     window.addEventListener('hashchange', routeAdmin);
@@ -365,6 +418,8 @@ function renderWelcome(errText) {
     el('header', {}, el('h1', {}, '⛳ 幹事キャディ')),
     el('main', {},
       errText && el('p', { class: 'err' }, errText),
+      accountCard(),
+      state.user && el('p', { class: 'muted' }, 'このアカウントに紐づいたチームはまだありません。新しく作るか、幹事用URLを開くと、紐づきます。'),
       el('div', { class: 'card' },
         el('h2', {}, '新しく始める'),
         el('p', { class: 'muted' }, '幹事のみんなで共有するチームを作ります。作成後に出る「幹事用URL」を他の幹事に送ると、同じデータを見られます。'),
@@ -2341,6 +2396,7 @@ async function viewTeams() {
   const remove = (t) => {
     if (!confirm(`「${t.name}」をこの端末のリストから外します（データは消えません）。幹事用URLを控えていないと、戻れなくなります。`)) return;
     setTeams(getTeams().filter((x) => x.token !== t.token));
+    if (state.user) authClient().rpc('unclaim_team', { p_token: t.token }).then(() => {}, () => {}); // 次回ログイン時に復活しないよう、紐づけも外す
     if (t.token !== state.token) return refresh();
     const next = getTeams()[0];
     if (next) return switchTo(next.token);
@@ -2413,6 +2469,7 @@ async function viewSettings() {
       el('p', { class: 'muted' }, '他の幹事にこのURLを送ると、同じ名簿・コンペを編集できます。URLを知っている人は誰でも編集できるので、幹事以外には送らないでください。参加者には、コンペごとの「出欠フォームURL」を配ります。'),
       el('input', { value: adminUrl, readonly: true, onclick: (e) => e.target.select() }),
       el('p', {}, el('button', { class: 'btn sm pri', onclick: () => copyText(adminUrl) }, '幹事用URLをコピー'))),
+    accountCard(),
     el('div', { class: 'card' },
       el('a', { class: 'btn block', href: '#/teams' }, 'チームを切り替える・新しく作る'))
   ];
