@@ -451,6 +451,14 @@ async function init() {
   if (!state.listening) {
     state.listening = true;
     window.addEventListener('hashchange', routeAdmin);
+    // 戻る操作（左スワイプ）で、アプリの最初の画面より前（ログイン処理の途中ページなど）へ戻ってエラーにならないよう、ここを履歴の先頭にする
+    try {
+      history.replaceState({ guardRoot: true }, '', location.href);
+      history.pushState({ guardApp: true }, '', location.href);
+      window.addEventListener('popstate', (e) => {
+        if (e.state && e.state.guardRoot) history.forward();
+      });
+    } catch (e) { /* 履歴を操作できなくても、そのまま使える */ }
   }
   routeAdmin();
 }
