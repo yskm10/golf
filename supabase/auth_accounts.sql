@@ -53,3 +53,28 @@ begin
 end $$;
 revoke all on function public.unclaim_team(text) from public, anon;
 grant execute on function public.unclaim_team(text) to authenticated;
+
+-- 運営者（2026-11-20）：app_admins に入れたアカウントは、my_teams() で全チームが見える（サポート・トラブル確認用）
+create table if not exists public.app_admins (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  note text,
+  created_at timestamptz not null default now()
+);
+alter table public.app_admins enable row level security;
+revoke all on public.app_admins from anon, authenticated;
+-- insert into public.app_admins(user_id, note) values ('<auth.users の id>', '運営者');
+
+drop function if exists public.my_teams();
+create function public.my_teams()
+returns table(id uuid, name text, admin_token text, owner_name text)
+language sql stable security definer set search_path = public as $$
+  select t.id, t.name, t.admin_token,
+    (select coalesce(u.raw_user_meta_data->>'name', u.raw_user_meta_data->>'full_name') from auth.users u where u.id = t.created_by)
+  from public.teams t
+  where exists (select 1 from public.app_admins a where a.user_id = auth.uid())
+     or t.id in (select m.team_id from public.team_members m where m.user_id = auth.uid())
+  order by t.created_at;
+$$;
+revoke all on function public.my_teams() from public, anon;
+grant execute on function public.my_teams() to authenticated;
+

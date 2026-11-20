@@ -97,3 +97,4 @@
 - 確認できていないこと：Edge Functionの402は、サンドボックスから呼べず、実機未確認。
 - 運用メモ（2026-11-11）：公開前の友人テスト中は、指示があるまで、すべて有料扱い。`teams.plan` の初期値を 'pro' にしてある。公開時に `alter table public.teams alter column plan set default 'free';` で戻す。
 - 友人向けの案内ページ `install.html`（iPhone/Androidのホーム画面追加の手順、LINE内ブラウザの注意）を追加（2026-11-11）。ログイン前の画面の下からリンク。
+- 運営者機能（2026-11-20）：`app_admins` に入れたアカウント（もり）は、`my_teams()` で全チームの幹事用トークンを取得でき、チーム切り替えに全チームが並ぶ（作成者名つき）。サポート・トラブル確認用。プライバシーポリシーに「運営者が必要な範囲で閲覧することがある」旨を追記済み。追加は `insert into public.app_admins(user_id, note) values (...)`。

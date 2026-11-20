@@ -104,9 +104,9 @@ function getTeams() {
   try { const a = JSON.parse(ls.get('golf_teams') || '[]'); return Array.isArray(a) ? a.filter((t) => t && t.token) : []; } catch (e) { return []; }
 }
 function setTeams(a) { ls.set('golf_teams', JSON.stringify(a)); }
-function rememberTeam(token, name) {
+function rememberTeam(token, name, owner) {
   const a = getTeams(); const t = a.find((x) => x.token === token);
-  if (t) t.name = name; else a.push({ token, name });
+  if (t) { t.name = name; if (owner !== undefined) t.owner = owner || ''; } else a.push(owner ? { token, name, owner } : { token, name });
   setTeams(a);
 }
 async function fetchTeam(token) {
@@ -321,7 +321,7 @@ async function syncAccount() {
     const linked = new Set((data || []).map((t) => t.admin_token));
     // この端末に保存されているチームのうち、まだ紐づいていないものを、すべて紐づける（失敗しても続ける）
     getTeams().filter((t) => !linked.has(t.token)).forEach((t) => authClient().rpc('claim_team', { p_token: t.token }).then(() => {}, () => {}));
-    (data || []).forEach((t) => rememberTeam(t.admin_token, t.name));
+    (data || []).forEach((t) => rememberTeam(t.admin_token, t.name, t.owner_name));
     if (!ls.get('golf_token') && data && data.length) ls.set('golf_token', data[0].admin_token);
   } catch (e) { /* 復元できなくても、今の端末の状態で続ける */ }
 }
@@ -2474,6 +2474,13 @@ async function viewPrint(id) {
 
 /* ====== チームの切り替え ====== */
 async function viewTeams() {
+  // ログイン中は、紐づいているチーム（運営者は全チーム）を、最新の状態に更新してから表示する
+  if (state.user) {
+    try {
+      const { data } = await authClient().rpc('my_teams');
+      (data || []).forEach((t) => rememberTeam(t.admin_token, t.name, t.owner_name));
+    } catch (e) { /* 更新できなくても、端末の一覧で表示する */ }
+  }
   const teams = getTeams();
   const nameIn = el('input', { placeholder: '例：○○ゴルフ会 幹事チーム' });
   const urlIn = el('input', { placeholder: '幹事用URLを貼り付け' });
@@ -2493,7 +2500,8 @@ async function viewTeams() {
     el('h2', {}, 'チームを切り替える'),
     teams.map((t) => el('div', { class: 'card' },
       el('div', { class: 'row between' },
-        el('div', {}, el('strong', {}, t.name), t.token === state.token && el('span', { class: 'badge', style: 'margin-left:6px' }, '使用中')),
+        el('div', {}, el('strong', {}, t.name), t.token === state.token && el('span', { class: 'badge', style: 'margin-left:6px' }, '使用中'),
+          t.owner && state.user && t.owner !== userName(state.user) && el('div', { class: 'muted', style: 'font-size:12px' }, '作成者：' + t.owner)),
         t.token === state.token
           ? el('a', { class: 'btn sm pri', href: '#/events' }, 'このチームで続ける')
           : el('button', { class: 'btn sm pri', onclick: () => switchTo(t.token) }, '切り替える')),
