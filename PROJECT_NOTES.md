@@ -42,9 +42,10 @@
 
 ## 作業の進め方（重要）
 1. 機能ごとにブランチを切って実装 → 動作確認（Playwright＋模擬クライアントで画面、`execute_sql` で読み取りだけ）。
-2. **データベースの変更が要るときは、SQLを書いて幹事（ユーザー）がSupabaseのSQL Editorで実行**。`apply_migration` は何度も「cancelled」になるため使わない。実行後に読み取りSQLで確認する。
+2. データベースの変更（SQL）は、Claudeが `execute_sql` で実行してよい（森さんの指示、2026-11）。`apply_migration` は何度も「cancelled」になるため使わない。実行したSQLは、必ず `supabase/` のファイルに記録し、実行後に読み取りSQLで確認する。
 3. mainへ fast-forward マージして push（GitHub Pages に公開される）。
 4. コミット末尾：`Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` と `Claude-Session: …`。
+5. **Muse（森さんの個人エージェント）からの指摘・レビュー・作業依頼は、GitHub Issueで受け渡す**。Claudeは、対応結果を、そのIssueへのコメントで返し、資料ファイルを更新したときは、対象箇所をコメントに書く。森さんは、セッション開始時にIssue番号を伝える。（Issue #1 が、その1件目）
 - 検証環境（クラウド上のコンテナ）からは CDN と supabase.co に届かない。画面のテストは `@supabase/supabase-js@2` を模擬クライアントに差し替えて行う。写真読み取りの実物確認は、ユーザーの実機で行う（予約スクショの読み取りは本番のコンペで使用済み。成績表の写真読み取りは未確認。確認表は `REAL_DEVICE_CHECKLIST.md`）。
 
 ## まだやっていないこと／検討中
@@ -105,4 +106,4 @@
 - 公開前の最重要課題：権限をURLトークンからログインアカウント基準へ移す（`DESIGN_account_permissions.md`）。
 - 開発の進め方：編集者は当面Claudeのみ。ファイル分割は後回し。他のAI（Muse）が編集に入る場合も分割せず、機能ごとにブランチを切って住み分ける。DBの変更は `supabase/` のSQLに必ず記録する。
 - 課金方式は未決定。友人へのヒアリング（年額いくらなら払うか／1コンペいくらなら払うか）の結果が出るまで決めない。
-
+- 有料化・公開前の作業は `PRELAUNCH_CHECKLIST.md`（配信経路、決済とプランの連動、法務、プライバシー点検、費用の上限）。
