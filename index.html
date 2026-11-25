@@ -937,6 +937,22 @@ async function viewEvent(id) {
     ev.form_deadline ? '締切：' + fmtDateTime(ev.form_deadline) : null,
     ev.notes_line ? '\n' + ev.notes_line : null
   ].filter((x) => x !== null && x !== undefined).join('\n');
+  // 幹事が編集して保存した案内文があれば、それを使う（なければ、上で自動作成した文章）
+  const sendText = ev.line_text || lineText;
+  const lineArea = el('textarea', { rows: 12, style: 'width:100%;margin-top:8px' });
+  lineArea.value = sendText;
+  const saveLineText = () => guard(async () => {
+    const v = lineArea.value.trim();
+    must(await sb.from('events').update({ line_text: !v || v === lineText.trim() ? null : lineArea.value }).eq('id', id));
+    toast('案内文を保存しました');
+    refresh();
+  });
+  const resetLineText = () => guard(async () => {
+    if (!confirm('編集した案内文を捨てて、コンペの内容から自動で作り直しますか？')) return;
+    must(await sb.from('events').update({ line_text: null }).eq('id', id));
+    toast('自動作成に戻しました');
+    refresh();
+  });
 
   // ---- 予約内容 ----
   const yen = (n) => '¥' + Number(n).toLocaleString('ja-JP');
@@ -1058,14 +1074,22 @@ async function viewEvent(id) {
       el('input', { value: formUrl, readonly: true, style: 'margin-top:8px', onclick: (e) => e.target.select() }),
       ev.form_deadline && el('div', { class: 'muted' }, '締切：' + fmtDateTime(ev.form_deadline)),
       el('div', { class: 'row', style: 'margin-top:8px' },
-        el('button', { class: 'btn sm pri', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー'),
+        el('button', { class: 'btn sm pri', onclick: () => copyText(sendText) }, 'LINE用の案内文をコピー'),
         el('button', { class: 'btn sm', onclick: () => copyText(formUrl) }, 'URLだけコピー'),
         el('button', {
           class: 'btn sm', onclick: () => guard(async () => {
             must(await sb.from('events').update({ form_open: !ev.form_open }).eq('id', id));
             refresh();
           })
-        }, ev.form_open ? '受付を止める' : '受付を再開'))),
+        }, ev.form_open ? '受付を止める' : '受付を再開')),
+      el('details', { style: 'margin-top:10px' },
+        el('summary', {}, ev.line_text ? '✏️ 案内文を編集する（編集した文章を使用中）' : '✏️ 案内文を編集する'),
+        ev.line_text && el('div', { class: 'muted', style: 'font-size:13px;margin-top:6px' }, '編集した文章を使っています。コンペの日付や料金を変えても、この文章は自動では変わりません。'),
+        lineArea,
+        el('div', { class: 'row', style: 'margin-top:8px' },
+          el('button', { class: 'btn sm pri', onclick: saveLineText }, '保存する'),
+          el('button', { class: 'btn sm', onclick: () => copyText(lineArea.value) }, 'この文章をコピー'),
+          ev.line_text && el('button', { class: 'btn sm', onclick: resetLineText }, '自動作成に戻す')))),
     pending.length > 0 && el('h3', {}, `承認待ち（${pending.length}）`),
     pending.map(pendingCard),
     el('h3', {}, `参加（${joined.length}）`),
